@@ -1,0 +1,19 @@
+---
+rid: "ri.vector.main.workbook.ec5379ee-2008-4004-a448-0df18cc966a8"
+repositoryRid: "ri.stemma.main.repository.9b13a83b-19f3-43f0-b0e3-635b3bf50ddb"
+environmentRepositoryRid: null
+backingRepositoryRids:
+- "ri.vector.runtime.artifacts.repository"
+- "ri.artifacts.repository.artifactory.external-conda-forge"
+- "ri.artifacts.repository.artifactory.external-conda-anaconda"
+- "ri.artifacts.repository.artifactory.internal-docker-release"
+outputFolderRid: "ri.compass.main.folder.b1d2b42e-2109-465b-b13c-f3def29c8f5e"
+comparisonParentFolderRid: "ri.compass.main.folder.f1a4796a-1b67-4be0-99f5-b32464f1f0db"
+legacyVectorLanguage: null
+autoLayoutPaths: false
+useProjectScope: true
+tokenMode: "SCOPED_TOKEN"
+duplicatedFromWorkbook:
+  workbookRid: "ri.vector.main.workbook.672009e1-f8ec-491c-892e-dca7970a0412"
+  branch: "Diabetics - Metformin v No Treatment"
+workbookType: "DEFAULT"
