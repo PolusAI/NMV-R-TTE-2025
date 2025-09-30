@@ -38,6 +38,1090 @@ pd.set_option('display.width', 1000)
 
 
 @transform_pandas(
+    Output(rid="ri.foundry.main.dataset.81c00668-6457-460b-bcef-f10336b24ae2"),
+    CoxRegression_Bootstrapping_Death=Input(rid="ri.foundry.main.dataset.f3f5ddb5-9fe2-4960-895d-af0bc73d4503")
+)
+# CIF from Cox Regression and RR (e2f11c5d-067b-426e-aa90-2abe4cb1d6f0): v1
+def CIF_Death(CoxRegression_Bootstrapping_Death):
+
+    import scipy.stats as stats
+    
+    DF = CoxRegression_Bootstrapping_Death
+    time_end = 14
+    comparisons = 1
+    p_value = 0.05/comparisons
+    Z_value = (stats.norm.ppf(p_value/2))*-1
+    step_plot = True
+
+    # Create a copy of the dataset
+    main_df = DF.toPandas()
+    main_df['timeline'] = main_df['timeline'].astype(int)
+
+    # Right now we have 500 bootstrap survival curves
+    # ("time","treatment","control","bootstrap")
+    def lower_quantile(series):
+        result = series.quantile(p_value/2)
+        return result
+
+    def upper_quantile(series):
+        result = series.quantile(1 - (p_value/2))
+        return result
+
+    # We have to stack the data frames separately for treatment and control
+    df = main_df.query('bootstrap != 999')
+    df = df.set_index(['timeline','bootstrap'])
+    df = df.rename_axis('treatment', axis=1)
+    df = df.stack()
+    df = pd.DataFrame(df)
+    df.columns = ['surv']
+    df['cum_inc'] = 1 - df['surv']
+    df = df.reset_index(drop = False)
+    print(df.head())
+
+    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
+    df_overall = main_df.query('bootstrap == 999')
+    df_overall = df_overall.set_index(['timeline','bootstrap'])
+    df_overall = df_overall.rename_axis('treatment', axis=1)
+    df_overall = df_overall.stack()
+    print(df_overall.head())
+    df_overall = pd.DataFrame(df_overall)
+    df_overall.columns = ['surv']
+    df_overall['cum_inc'] = 1 - df_overall['surv']
+    df_overall = df_overall.reset_index(drop = False)
+    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
+    print(df_overall.head())
+    ###############################################################
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
+    ll = ('cum_inc', lower_quantile),
+    ul = ('cum_inc', upper_quantile)
+    )
+    print(df.head())
+    
+    df = df.reset_index()
+
+    ### NOW WE CAN PLOT
+    fig, ax = plt.subplots(1,1, figsize = (11, 6))
+
+    # # Plot the curves for each group
+    # df.query('treatment == "treatment"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'blue') # Plot marginal survival curve (averaged) for treated group
+    # df.query('treatment == "control"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'orange') # Plot the averaged marginal survival curve for the control group
+    # ax.legend(['Treated', 'Untreated'])
+
+     # Alternative plotting
+    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
+    df_overall2.index = df_overall2.index.droplevel(level = 0)
+    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
+    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
+    
+    if step_plot:
+        df_overall2.plot(drawstyle="steps-post", ax = ax)
+    else:
+        df_overall2.plot(ax = ax)
+
+    # ax.legend(['Treated', 'Untreated'])
+    ax.legend(title = 'Group')
+
+    # Plot the CI - first for the treated group (using fill_between)
+    if step_plot:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                        color = 'orange', alpha = 0.2, step = 'post')
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2, step = 'post')
+    else:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                    color = 'orange', alpha = 0.2)
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2)
+
+    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
+    ax.set_title('Death', fontsize=11)
+    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
+    ax.set_xlabel('Time (Days)', fontsize=10)
+    plt.show()
+
+    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
+    # df = main_df.toPandas()
+    df = main_df
+    df = df.set_index(['timeline','bootstrap'])
+    # Now calculate the probability difference
+    df['treatment'] = 1 - df['treatment']
+    df['control'] = 1 - df['control']
+    df['treatment'] = df['treatment']
+    df['control'] = df['control']
+    df['risk_reduction'] = df['control'] - df['treatment']
+    # Now take the risk ratio
+    df['risk_ratio'] = df['treatment']/df['control']
+    print(df.head())
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
+    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
+    risk_reduction_se = ('risk_reduction', np.std),
+    risk_reduction_ll = ('risk_reduction', lower_quantile),
+    risk_reduction_ul = ('risk_reduction', upper_quantile),
+    # Get statistics for the risk ratio
+    risk_ratio = ('risk_ratio', np.mean),
+    risk_ratio_se = ('risk_ratio', np.std),
+    risk_ratio_ll = ('risk_ratio', lower_quantile),
+    risk_ratio_ul = ('risk_ratio', upper_quantile)
+    )
+
+    # Calculate the CI using the SE
+    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - Z_value*df_statistics['risk_ratio_se']
+    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + Z_value*df_statistics['risk_ratio_se']
+    df_statistics = df_statistics.reset_index()
+
+    ############################
+    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
+    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    risk_reduction = control_cuminc - treatment_cuminc
+    risk_ratio = treatment_cuminc/control_cuminc
+
+    # substitute those values into the table
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
+    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
+    ############################
+
+    output_dataframe = df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
+    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
+    output_dataframe['drug'] = 'Paxlovid'
+
+    return output_dataframe
+    
+
+#################################################
+## Global imports and functions included below ##
+#################################################
+
+######## GLOBAL CODE
+# We can add this code to the GLOBAL CODE on the RHS pane
+# Import the data types we will be using to functions and schemas
+from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
+from pyspark.sql import Row
+
+# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
+from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
+from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
+
+# Additional Functions
+from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
+
+# Functions for window functions
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+### PYTHON Functions
+import datetime as dt
+
+## GLOBAL PY CODE
+### Import all necessary packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+
+# Pandas functions
+idx = pd.IndexSlice
+
+# Viewing related functions
+import warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.61ca4735-9c8e-420e-bd4f-219351d0a6cf"),
+    CoxRegression_Bootstrapping_DeathHosp=Input(rid="ri.foundry.main.dataset.17846d20-9287-43c6-95ca-0a833ffdcc9e")
+)
+# CIF from Cox Regression and RR (e2f11c5d-067b-426e-aa90-2abe4cb1d6f0): v1
+def CIF_DeathorHosp(CoxRegression_Bootstrapping_DeathHosp):
+
+    import scipy.stats as stats
+    
+    DF = CoxRegression_Bootstrapping_DeathHosp
+    time_end = 14
+    comparisons = 1
+    p_value = 0.05/comparisons
+    Z_value = (stats.norm.ppf(p_value/2))*-1
+    step_plot = True
+
+    # Create a copy of the dataset
+    main_df = DF.toPandas()
+    main_df['timeline'] = main_df['timeline'].astype(int)
+
+    # Right now we have 500 bootstrap survival curves
+    # ("time","treatment","control","bootstrap")
+    def lower_quantile(series):
+        result = series.quantile(p_value/2)
+        return result
+
+    def upper_quantile(series):
+        result = series.quantile(1 - (p_value/2))
+        return result
+
+    # We have to stack the data frames separately for treatment and control
+    df = main_df.query('bootstrap != 999')
+    df = df.set_index(['timeline','bootstrap'])
+    df = df.rename_axis('treatment', axis=1)
+    df = df.stack()
+    df = pd.DataFrame(df)
+    df.columns = ['surv']
+    df['cum_inc'] = 1 - df['surv']
+    df = df.reset_index(drop = False)
+    print(df.head())
+
+    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
+    df_overall = main_df.query('bootstrap == 999')
+    df_overall = df_overall.set_index(['timeline','bootstrap'])
+    df_overall = df_overall.rename_axis('treatment', axis=1)
+    df_overall = df_overall.stack()
+    print(df_overall.head())
+    df_overall = pd.DataFrame(df_overall)
+    df_overall.columns = ['surv']
+    df_overall['cum_inc'] = 1 - df_overall['surv']
+    df_overall = df_overall.reset_index(drop = False)
+    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
+    print(df_overall.head())
+    ###############################################################
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
+    ll = ('cum_inc', lower_quantile),
+    ul = ('cum_inc', upper_quantile)
+    )
+    print(df.head())
+    
+    df = df.reset_index()
+
+    ### NOW WE CAN PLOT
+    fig, ax = plt.subplots(1,1, figsize = (11, 6))
+
+    # # Plot the curves for each group
+    # df.query('treatment == "treatment"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'blue') # Plot marginal survival curve (averaged) for treated group
+    # df.query('treatment == "control"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'orange') # Plot the averaged marginal survival curve for the control group
+    # ax.legend(['Treated', 'Untreated'])
+
+     # Alternative plotting
+    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
+    df_overall2.index = df_overall2.index.droplevel(level = 0)
+    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
+    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
+    
+    if step_plot:
+        df_overall2.plot(drawstyle="steps-post", ax = ax)
+    else:
+        df_overall2.plot(ax = ax)
+
+    # ax.legend(['Treated', 'Untreated'])
+    ax.legend(title = 'Group')
+
+    # Plot the CI - first for the treated group (using fill_between)
+    if step_plot:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                        color = 'orange', alpha = 0.2, step = 'post')
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2, step = 'post')
+    else:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                    color = 'orange', alpha = 0.2)
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2)
+
+    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
+    ax.set_title('Death or Hospitalization', fontsize=11)
+    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
+    ax.set_xlabel('Time (Days)', fontsize=10)
+    plt.show()
+
+    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
+    # df = main_df.toPandas()
+    df = main_df
+    df = df.set_index(['timeline','bootstrap'])
+    # Now calculate the probability difference
+    df['treatment'] = 1 - df['treatment']
+    df['control'] = 1 - df['control']
+    df['treatment'] = df['treatment']
+    df['control'] = df['control']
+    df['risk_reduction'] = df['control'] - df['treatment']
+    # Now take the risk ratio
+    df['risk_ratio'] = df['treatment']/df['control']
+    print(df.head())
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
+    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
+    risk_reduction_se = ('risk_reduction', np.std),
+    risk_reduction_ll = ('risk_reduction', lower_quantile),
+    risk_reduction_ul = ('risk_reduction', upper_quantile),
+    # Get statistics for the risk ratio
+    risk_ratio = ('risk_ratio', np.mean),
+    risk_ratio_se = ('risk_ratio', np.std),
+    risk_ratio_ll = ('risk_ratio', lower_quantile),
+    risk_ratio_ul = ('risk_ratio', upper_quantile)
+    )
+
+    # Calculate the CI using the SE
+    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - Z_value*df_statistics['risk_ratio_se']
+    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + Z_value*df_statistics['risk_ratio_se']
+    df_statistics = df_statistics.reset_index()
+
+    ############################
+    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
+    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    risk_reduction = control_cuminc - treatment_cuminc
+    risk_ratio = treatment_cuminc/control_cuminc
+
+    # substitute those values into the table
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
+    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
+    ############################
+
+    output_dataframe = df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
+    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
+    output_dataframe['drug'] = 'Paxlovid'
+
+    return output_dataframe
+    
+
+#################################################
+## Global imports and functions included below ##
+#################################################
+
+######## GLOBAL CODE
+# We can add this code to the GLOBAL CODE on the RHS pane
+# Import the data types we will be using to functions and schemas
+from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
+from pyspark.sql import Row
+
+# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
+from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
+from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
+
+# Additional Functions
+from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
+
+# Functions for window functions
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+### PYTHON Functions
+import datetime as dt
+
+## GLOBAL PY CODE
+### Import all necessary packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+
+# Pandas functions
+idx = pd.IndexSlice
+
+# Viewing related functions
+import warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.5c3d51c5-1717-4b12-8805-29441980fc42"),
+    Competing_Risk_CoxRegression_Bootstrapping_Hospitalization=Input(rid="ri.foundry.main.dataset.4c36dc00-4cc7-45ad-aee7-846b1481c824")
+)
+# CIF from Cox Regression and RR (e2f11c5d-067b-426e-aa90-2abe4cb1d6f0): v2
+def CIF_Hospitalization(Competing_Risk_CoxRegression_Bootstrapping_Hospitalization):
+
+    import scipy.stats as stats
+    
+    DF = Competing_Risk_CoxRegression_Bootstrapping_Hospitalization.withColumnRenamed('time','timeline')
+    time_end = 14
+    comparisons = 1
+    p_value = 0.05/comparisons
+    Z_value = (stats.norm.ppf(p_value/2))*-1
+    step_plot = True
+
+    # Create a copy of the dataset
+    main_df = DF.toPandas()
+    main_df['timeline'] = main_df['timeline'].astype(int)
+
+    # Right now we have 500 bootstrap survival curves
+    # ("time","treatment","control","bootstrap")
+    def lower_quantile(series):
+        result = series.quantile(p_value/2)
+        return result
+
+    def upper_quantile(series):
+        result = series.quantile(1 - (p_value/2))
+        return result
+
+    # We have to stack the data frames separately for treatment and control
+    df = main_df.query('bootstrap != 999')
+    df = df.set_index(['timeline','bootstrap'])
+    df = df.rename_axis('treatment', axis=1)
+    df = df.stack()
+    df = pd.DataFrame(df)
+    df.columns = ['surv']
+    df['cum_inc'] = 1 - df['surv']
+    df = df.reset_index(drop = False)
+    print(df.head())
+
+    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
+    df_overall = main_df.query('bootstrap == 999')
+    df_overall = df_overall.set_index(['timeline','bootstrap'])
+    df_overall = df_overall.rename_axis('treatment', axis=1)
+    df_overall = df_overall.stack()
+    print(df_overall.head())
+    df_overall = pd.DataFrame(df_overall)
+    df_overall.columns = ['surv']
+    df_overall['cum_inc'] = 1 - df_overall['surv']
+    df_overall = df_overall.reset_index(drop = False)
+    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
+    print(df_overall.head())
+    ###############################################################
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
+    ll = ('cum_inc', lower_quantile),
+    ul = ('cum_inc', upper_quantile)
+    )
+    print(df.head())
+    
+    df = df.reset_index()
+
+    ### NOW WE CAN PLOT
+    fig, ax = plt.subplots(1,1, figsize = (11, 6))
+
+    # # Plot the curves for each group
+    # df.query('treatment == "treatment"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'blue') # Plot marginal survival curve (averaged) for treated group
+    # df.query('treatment == "control"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'orange') # Plot the averaged marginal survival curve for the control group
+    # ax.legend(['Treated', 'Untreated'])
+
+     # Alternative plotting
+    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
+    df_overall2.index = df_overall2.index.droplevel(level = 0)
+    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
+    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
+    
+    if step_plot:
+        df_overall2.plot(drawstyle="steps-post", ax = ax)
+    else:
+        df_overall2.plot(ax = ax)
+
+    # ax.legend(['Treated', 'Untreated'])
+    ax.legend(title = 'Group')
+
+    # Plot the CI - first for the treated group (using fill_between)
+    if step_plot:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                        color = 'orange', alpha = 0.2, step = 'post')
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2, step = 'post')
+    else:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                    color = 'orange', alpha = 0.2)
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2)
+
+    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
+    ax.set_title('Composite - ED visit, hospitalization, supplemental oxygen, or death', fontsize=11)
+    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
+    ax.set_xlabel('Time (Days)', fontsize=10)
+    plt.show()
+
+    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
+    # df = main_df.toPandas()
+    df = main_df
+    df = df.set_index(['timeline','bootstrap'])
+    # Now calculate the probability difference
+    df['treatment'] = 1 - df['treatment']
+    df['control'] = 1 - df['control']
+    df['treatment'] = df['treatment']
+    df['control'] = df['control']
+    df['risk_reduction'] = df['control'] - df['treatment']
+    # Now take the risk ratio
+    df['risk_ratio'] = df['treatment']/df['control']
+    print(df.head())
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
+    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
+    risk_reduction_se = ('risk_reduction', np.std),
+    risk_reduction_ll = ('risk_reduction', lower_quantile),
+    risk_reduction_ul = ('risk_reduction', upper_quantile),
+    # Get statistics for the risk ratio
+    risk_ratio = ('risk_ratio', np.mean),
+    risk_ratio_se = ('risk_ratio', np.std),
+    risk_ratio_ll = ('risk_ratio', lower_quantile),
+    risk_ratio_ul = ('risk_ratio', upper_quantile)
+    )
+
+    # Calculate the CI using the SE
+    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - Z_value*df_statistics['risk_ratio_se']
+    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + Z_value*df_statistics['risk_ratio_se']
+    df_statistics = df_statistics.reset_index()
+
+    ############################
+    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
+    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    risk_reduction = control_cuminc - treatment_cuminc
+    risk_ratio = treatment_cuminc/control_cuminc
+
+    # substitute those values into the table
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
+    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
+    ############################
+
+    output_dataframe = df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
+    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
+    output_dataframe['drug'] = 'Paxlovid'
+
+    return output_dataframe
+    
+
+#################################################
+## Global imports and functions included below ##
+#################################################
+
+######## GLOBAL CODE
+# We can add this code to the GLOBAL CODE on the RHS pane
+# Import the data types we will be using to functions and schemas
+from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
+from pyspark.sql import Row
+
+# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
+from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
+from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
+
+# Additional Functions
+from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
+
+# Functions for window functions
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+### PYTHON Functions
+import datetime as dt
+
+## GLOBAL PY CODE
+### Import all necessary packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+
+# Pandas functions
+idx = pd.IndexSlice
+
+# Viewing related functions
+import warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.25c1a3be-a08a-4022-8a05-1fe2e1f53640"),
+    Competing_Risk_CoxRegression_Bootstrapping_LongCOVID=Input(rid="ri.foundry.main.dataset.f6b4bf63-2ee1-43b9-a939-14ce9d729f66")
+)
+# CIF from Cox Regression and RR (e2f11c5d-067b-426e-aa90-2abe4cb1d6f0): v2
+def CIF_LongCOVID(Competing_Risk_CoxRegression_Bootstrapping_LongCOVID):
+
+    import scipy.stats as stats
+    
+    DF = Competing_Risk_CoxRegression_Bootstrapping_LongCOVID.withColumnRenamed('time','timeline')
+    time_end = 180
+    comparisons = 1
+    p_value = 0.05/comparisons
+    Z_value = (stats.norm.ppf(p_value/2))*-1
+    step_plot = True
+
+    # Create a copy of the dataset
+    main_df = DF.toPandas()
+    main_df['timeline'] = main_df['timeline'].astype(int)
+
+    # Right now we have 500 bootstrap survival curves
+    # ("time","treatment","control","bootstrap")
+    def lower_quantile(series):
+        result = series.quantile(p_value/2)
+        return result
+
+    def upper_quantile(series):
+        result = series.quantile(1 - (p_value/2))
+        return result
+
+    # We have to stack the data frames separately for treatment and control
+    df = main_df.query('bootstrap != 999')
+    df = df.set_index(['timeline','bootstrap'])
+    df = df.rename_axis('treatment', axis=1)
+    df = df.stack()
+    df = pd.DataFrame(df)
+    df.columns = ['surv']
+    df['cum_inc'] = 1 - df['surv']
+    df = df.reset_index(drop = False)
+    print(df.head())
+
+    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
+    df_overall = main_df.query('bootstrap == 999')
+    df_overall = df_overall.set_index(['timeline','bootstrap'])
+    df_overall = df_overall.rename_axis('treatment', axis=1)
+    df_overall = df_overall.stack()
+    print(df_overall.head())
+    df_overall = pd.DataFrame(df_overall)
+    df_overall.columns = ['surv']
+    df_overall['cum_inc'] = 1 - df_overall['surv']
+    df_overall = df_overall.reset_index(drop = False)
+    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
+    print(df_overall.head())
+    ###############################################################
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
+    ll = ('cum_inc', lower_quantile),
+    ul = ('cum_inc', upper_quantile)
+    )
+    print(df.head())
+    
+    df = df.reset_index()
+
+    ### NOW WE CAN PLOT
+    fig, ax = plt.subplots(1,1, figsize = (11, 6))
+
+    # # Plot the curves for each group
+    # df.query('treatment == "treatment"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'blue') # Plot marginal survival curve (averaged) for treated group
+    # df.query('treatment == "control"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'orange') # Plot the averaged marginal survival curve for the control group
+    # ax.legend(['Treated', 'Untreated'])
+
+     # Alternative plotting
+    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
+    df_overall2.index = df_overall2.index.droplevel(level = 0)
+    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
+    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
+    
+    if step_plot:
+        df_overall2.plot(drawstyle="steps-post", ax = ax)
+    else:
+        df_overall2.plot(ax = ax)
+
+    # ax.legend(['Treated', 'Untreated'])
+    ax.legend(title = 'Group')
+
+    # Plot the CI - first for the treated group (using fill_between)
+    if step_plot:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                        color = 'orange', alpha = 0.2, step = 'post')
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2, step = 'post')
+    else:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                    color = 'orange', alpha = 0.2)
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2)
+
+    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
+    ax.set_title('Composite - ED visit, hospitalization, supplemental oxygen, or death', fontsize=11)
+    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
+    ax.set_xlabel('Time (Days)', fontsize=10)
+    plt.show()
+
+    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
+    # df = main_df.toPandas()
+    df = main_df
+    df = df.set_index(['timeline','bootstrap'])
+    # Now calculate the probability difference
+    df['treatment'] = 1 - df['treatment']
+    df['control'] = 1 - df['control']
+    df['treatment'] = df['treatment']
+    df['control'] = df['control']
+    df['risk_reduction'] = df['control'] - df['treatment']
+    # Now take the risk ratio
+    df['risk_ratio'] = df['treatment']/df['control']
+    print(df.head())
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
+    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
+    risk_reduction_se = ('risk_reduction', np.std),
+    risk_reduction_ll = ('risk_reduction', lower_quantile),
+    risk_reduction_ul = ('risk_reduction', upper_quantile),
+    # Get statistics for the risk ratio
+    risk_ratio = ('risk_ratio', np.mean),
+    risk_ratio_se = ('risk_ratio', np.std),
+    risk_ratio_ll = ('risk_ratio', lower_quantile),
+    risk_ratio_ul = ('risk_ratio', upper_quantile)
+    )
+
+    # Calculate the CI using the SE
+    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - Z_value*df_statistics['risk_ratio_se']
+    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + Z_value*df_statistics['risk_ratio_se']
+    df_statistics = df_statistics.reset_index()
+
+    ############################
+    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
+    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    risk_reduction = control_cuminc - treatment_cuminc
+    risk_ratio = treatment_cuminc/control_cuminc
+
+    # substitute those values into the table
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
+    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
+    ############################
+
+    output_dataframe = df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
+    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
+    output_dataframe['drug'] = 'Paxlovid'
+
+    return output_dataframe
+    
+
+#################################################
+## Global imports and functions included below ##
+#################################################
+
+######## GLOBAL CODE
+# We can add this code to the GLOBAL CODE on the RHS pane
+# Import the data types we will be using to functions and schemas
+from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
+from pyspark.sql import Row
+
+# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
+from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
+from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
+
+# Additional Functions
+from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
+
+# Functions for window functions
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+### PYTHON Functions
+import datetime as dt
+
+## GLOBAL PY CODE
+### Import all necessary packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+
+# Pandas functions
+idx = pd.IndexSlice
+
+# Viewing related functions
+import warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.6710a083-83ff-4d82-9c86-149534405923"),
+    CoxRegression_Bootstrapping_SevereIllness=Input(rid="ri.foundry.main.dataset.aa5bd8c3-32e8-49ff-b82f-31209e9773dd")
+)
+# CIF from Cox Regression and RR (e2f11c5d-067b-426e-aa90-2abe4cb1d6f0): v2
+def CIF_SevereIllness(CoxRegression_Bootstrapping_SevereIllness):
+
+    import scipy.stats as stats
+    
+    DF = CoxRegression_Bootstrapping_SevereIllness.withColumnRenamed('time','timeline')
+    time_end = 14
+    comparisons = 1
+    p_value = 0.05/comparisons
+    Z_value = (stats.norm.ppf(p_value/2))*-1
+    step_plot = True
+
+    # Create a copy of the dataset
+    main_df = DF.toPandas()
+    main_df['timeline'] = main_df['timeline'].astype(int)
+
+    # Right now we have 500 bootstrap survival curves
+    # ("time","treatment","control","bootstrap")
+    def lower_quantile(series):
+        result = series.quantile(p_value/2)
+        return result
+
+    def upper_quantile(series):
+        result = series.quantile(1 - (p_value/2))
+        return result
+
+    # We have to stack the data frames separately for treatment and control
+    df = main_df.query('bootstrap != 999')
+    df = df.set_index(['timeline','bootstrap'])
+    df = df.rename_axis('treatment', axis=1)
+    df = df.stack()
+    df = pd.DataFrame(df)
+    df.columns = ['surv']
+    df['cum_inc'] = 1 - df['surv']
+    df = df.reset_index(drop = False)
+    print(df.head())
+
+    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
+    df_overall = main_df.query('bootstrap == 999')
+    df_overall = df_overall.set_index(['timeline','bootstrap'])
+    df_overall = df_overall.rename_axis('treatment', axis=1)
+    df_overall = df_overall.stack()
+    print(df_overall.head())
+    df_overall = pd.DataFrame(df_overall)
+    df_overall.columns = ['surv']
+    df_overall['cum_inc'] = 1 - df_overall['surv']
+    df_overall = df_overall.reset_index(drop = False)
+    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
+    print(df_overall.head())
+    ###############################################################
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
+    ll = ('cum_inc', lower_quantile),
+    ul = ('cum_inc', upper_quantile)
+    )
+    print(df.head())
+    
+    df = df.reset_index()
+
+    ### NOW WE CAN PLOT
+    fig, ax = plt.subplots(1,1, figsize = (11, 6))
+
+    # # Plot the curves for each group
+    # df.query('treatment == "treatment"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'blue') # Plot marginal survival curve (averaged) for treated group
+    # df.query('treatment == "control"').plot(x = 'timeline', y = 'mean_cum_inc', ax = ax, color = 'orange') # Plot the averaged marginal survival curve for the control group
+    # ax.legend(['Treated', 'Untreated'])
+
+     # Alternative plotting
+    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
+    df_overall2.index = df_overall2.index.droplevel(level = 0)
+    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
+    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
+    
+    if step_plot:
+        df_overall2.plot(drawstyle="steps-post", ax = ax)
+    else:
+        df_overall2.plot(ax = ax)
+
+    # ax.legend(['Treated', 'Untreated'])
+    ax.legend(title = 'Group')
+
+    # Plot the CI - first for the treated group (using fill_between)
+    if step_plot:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                        color = 'orange', alpha = 0.2, step = 'post')
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2, step = 'post')
+    else:
+        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
+                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
+                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
+                    color = 'orange', alpha = 0.2)
+
+        # PLot the CI for the control group
+        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
+                        y1 = df.loc[df['treatment'] == "control", 'll'], 
+                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
+                        color = 'blue', alpha = 0.2)
+
+    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
+    ax.set_title('Composite - ED visit, hospitalization, supplemental oxygen, or death', fontsize=11)
+    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
+    ax.set_xlabel('Time (Days)', fontsize=10)
+    plt.show()
+
+    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
+    # df = main_df.toPandas()
+    df = main_df
+    df = df.set_index(['timeline','bootstrap'])
+    # Now calculate the probability difference
+    df['treatment'] = 1 - df['treatment']
+    df['control'] = 1 - df['control']
+    df['treatment'] = df['treatment']
+    df['control'] = df['control']
+    df['risk_reduction'] = df['control'] - df['treatment']
+    # Now take the risk ratio
+    df['risk_ratio'] = df['treatment']/df['control']
+    print(df.head())
+
+    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
+    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
+    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
+    risk_reduction_se = ('risk_reduction', np.std),
+    risk_reduction_ll = ('risk_reduction', lower_quantile),
+    risk_reduction_ul = ('risk_reduction', upper_quantile),
+    # Get statistics for the risk ratio
+    risk_ratio = ('risk_ratio', np.mean),
+    risk_ratio_se = ('risk_ratio', np.std),
+    risk_ratio_ll = ('risk_ratio', lower_quantile),
+    risk_ratio_ul = ('risk_ratio', upper_quantile)
+    )
+
+    # Calculate the CI using the SE
+    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - Z_value*df_statistics['risk_ratio_se']
+    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + Z_value*df_statistics['risk_ratio_se']
+    df_statistics = df_statistics.reset_index()
+
+    ############################
+    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
+    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
+    risk_reduction = control_cuminc - treatment_cuminc
+    risk_ratio = treatment_cuminc/control_cuminc
+
+    # substitute those values into the table
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
+    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
+    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
+    ############################
+
+    output_dataframe = df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
+    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
+    output_dataframe['drug'] = 'Paxlovid'
+
+    return output_dataframe
+    
+
+#################################################
+## Global imports and functions included below ##
+#################################################
+
+######## GLOBAL CODE
+# We can add this code to the GLOBAL CODE on the RHS pane
+# Import the data types we will be using to functions and schemas
+from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
+from pyspark.sql import Row
+
+# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
+from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
+from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
+
+# Additional Functions
+from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
+
+# Functions for window functions
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+### PYTHON Functions
+import datetime as dt
+
+## GLOBAL PY CODE
+### Import all necessary packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+
+# Pandas functions
+idx = pd.IndexSlice
+
+# Viewing related functions
+import warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+
+@transform_pandas(
+    Output(rid="ri.vector.main.execute.9c19a714-b5b2-46ef-8485-562f7bf9629f"),
+    propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
+)
+def Count_Unique_Events_PersonTrials(propensity_model_prep_expanded):
+
+    outcome_columns = ['composite14','mod_composite14','composite_death_hosp14','death14']
+
+    # aggregations = [max(col(c)).alias(c) for c in outcome_columns]
+    # df = propensity_model_prep_expanded.groupBy('person_id').agg(*aggregations)
+    
+    aggregations = [sum(col(c)).alias(c) for c in outcome_columns]
+    df = propensity_model_prep_expanded.agg(*aggregations)
+
+    return df
+    
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.fb73d6a6-58de-452d-acab-76408233fa8c"),
+    propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
+)
+def Count_Unique_Events_Persons(propensity_model_prep_expanded):
+
+    outcome_columns = ['composite14','mod_composite14','composite_death_hosp14','death14']
+
+    aggregations = [max(col(c)).alias(c) for c in outcome_columns]
+    df = propensity_model_prep_expanded.groupBy('person_id').agg(*aggregations)
+    
+    aggregations = [sum(col(c)).alias(c) for c in outcome_columns]
+    df = df.agg(*aggregations)
+
+    return df
+    
+
+@transform_pandas(
     Output(rid="ri.foundry.main.dataset.962db171-49d5-43cb-b07c-70bb82cfcda1"),
     DESCRIPTIVES_POST_MATCHING=Input(rid="ri.foundry.main.dataset.15f1209c-da22-4c27-a767-6611f088a673"),
     DESCRIPTIVES_PRE_MATCHING=Input(rid="ri.foundry.main.dataset.cfe6929b-fb38-4400-b787-0ced00b2a65b"),
@@ -79,6 +1163,7 @@ def DESCRIPTIVES_MATCHING_PLUS_SMD_MERGED(DESCRIPTIVES_POST_MATCHING, DESCRIPTIV
     testing_balance_copied_1=Input(rid="ri.foundry.main.dataset.3ce9c84e-3810-4a14-93c3-b73000249aa8")
 )
 def DESCRIPTIVES_POST_MATCHING(DESCRIPTIVES_PRE_MATCHING, nearest_neighbor_matching_all, eligible_sample_EHR_all, testing_balance_copied_1):
+    
     DESCRIPTIVES_PRE_MATCHING = DESCRIPTIVES_PRE_MATCHING
 
     # Start with the pre-matching dataset. This should also contain the target variables
@@ -86,12 +1171,14 @@ def DESCRIPTIVES_POST_MATCHING(DESCRIPTIVES_PRE_MATCHING, nearest_neighbor_match
     matching_data = nearest_neighbor_matching_all
 
     # Join the pre_matching_cohort to the matching output to retain matched pairs
-    pre_matching_cohort = pre_matching_cohort.join(matching_data.select('person_id','subclass').where(expr('subclass IS NOT NULL')), on = 'person_id', how = 'inner')
+    # pre_matching_cohort = pre_matching_cohort.join(matching_data.select('person_id','subclass').where(expr('subclass IS NOT NULL')), on = 'person_id', how = 'inner')
+    matching_data = matching_data.select('person_id','day','subclass').where(expr('subclass IS NOT NULL'))
+    pre_matching_cohort = pre_matching_cohort.join(matching_data, on = ['person_id','day'], how = 'inner')
     df = pre_matching_cohort
 
     # Set up the 
     id_variable = 'person_id'
-    treatment = 'paxlovid_treatment'
+    treatment = 'treatment'
     target_variable = 'composite60'
     
     # Set up column lists: demographics, BMI, vaccination, covariates (drugs and procedures), and optionally - other treatments
@@ -340,255 +1427,14 @@ def ED_visits(microvisits_to_macrovisits, minimal_patient_cohort, hospitalizatio
     return result.select('person_id','EDvisit_date_post_covid','EDvisit_date_pre_covid').distinct().where(expr('NOT(EDvisit_date_post_covid IS NULL AND EDvisit_date_pre_covid IS NULL)'))
 
 @transform_pandas(
-    Output(rid="ri.vector.main.execute.764fa4d6-054d-44fe-890f-9d7ab433c437"),
-    paxlovid_expanded_data_long_covid=Input(rid="ri.foundry.main.dataset.3d2b0e13-8f89-43c2-b72a-f1e6cad12d67")
+    Output(rid="ri.vector.main.execute.b5a83cdb-4a41-432c-9b1a-709681ec1c69"),
+    NumberOfTrialsEntered=Input(rid="ri.foundry.main.dataset.ff6671cd-bffa-4a1e-93bf-db435109814c")
 )
-def Get_KM_Curve_month_DTSA(paxlovid_expanded_data_long_covid):
+def Mean_Trials(NumberOfTrialsEntered):
 
-    title = 'Risk of Long COVID'
-    inset_title = 'By 180 days'
-    time = 'time'
-    outcome = 'outcome'
-    x_axis_label = 'Month'
-    control_group_label = 'Untreated'
-    treatment_group_label = 'Treated'
-    max_month = 7
+    df = NumberOfTrialsEntered.toPandas()
 
-    df = paxlovid_expanded_data_long_covid.withColumn('maxtime', expr('MAX(time) OVER(PARTITION BY person_id)')).where(expr('time = maxtime')).drop('maxtime')
-    df = df.select('person_id','treatment',time,outcome).toPandas()
-    
-    #################
-    treatment = 'treatment'
-
-    #### STEP 1 - GET THE LIFETABLE - N AT RISK
-    from lifelines.utils import survival_table_from_events
-    from lifelines import NelsonAalenFitter, KaplanMeierFitter
-    from matplotlib.gridspec import GridSpec
-    import matplotlib.table as tbl
-    from lifelines.plotting import add_at_risk_counts
-    
-    fig, ax = plt.subplots(1,1, figsize = (6,5))
-    set_output_image_type('svg')
-
-    ###### 1. PLOT FOR EARLY TREATMENT ("person_id","weight","treatment","time","outcome")
-    # First plot no treatment
-    f1 = KaplanMeierFitter()
-    f1.fit(durations = df.loc[(df[treatment] == 0), time], 
-    event_observed = df.loc[(df[treatment] == 0), outcome],
-    label = control_group_label, 
-    # weights = df.loc[(df[treatment] == 0), 'weight'], 
-    )
-
-    # Plot the cumulative density for 1 group
-    f1.plot_cumulative_density(ax = ax, ci_show = True)
-
-    
-
-    ############### Get lifetable
-    table1 = survival_table_from_events(death_times = df.loc[(df[treatment] == 0), time], 
-                                    event_observed = df.loc[(df[treatment] == 0), outcome],
-    #                                    intervals = 4
-                                        )
-
-    ### GET CUMULATIVE EVENTS AND PERCENT DIED
-    final_events1 = pd.DataFrame(table1.agg({'at_risk': lambda x: x.iloc[1], 'observed':np.sum})).T
-    final_events1['percent'] = (final_events1['observed'] / final_events1['at_risk'])*100
-    final_events1['group'] = control_group_label
-    print(final_events1)
-    ################################
-
-    # Next plot the treatment group
-    f2 = KaplanMeierFitter()
-    f2.fit(durations = df.loc[(df[treatment] == 1), time], 
-    event_observed = df.loc[(df[treatment] == 1), outcome],
-    label = treatment_group_label, 
-    # weights = df.loc[(df[treatment] == 1), 'weight']
-    )
-
-    # Plot the cumulative density for 1 group
-    f2.plot_cumulative_density(ax = ax, ci_alpha = 0.1, ci_show = True)
-
-    ############### Get lifetable
-    table2 = survival_table_from_events(death_times = df.loc[(df[treatment] == 1), time], 
-                                    event_observed = df.loc[(df[treatment] == 1), outcome],
-    #                                    intervals = 4
-                                        )
-
-    ### GET CUMULATIVE EVENTS AND PERCENT DIED
-    final_events2 = pd.DataFrame(table2.agg({'at_risk': lambda x: x.iloc[1], 'observed':np.sum})).T
-    final_events2['percent'] = (final_events2['observed'] / final_events2['at_risk'])*100
-    final_events2['group'] = treatment_group_label
-    print(final_events2)
-    ################################
-
-    from lifelines.statistics import logrank_test
-    logrank1 = logrank_test(df.loc[(df[treatment] == 0), time], 
-    df.loc[(df[treatment] == 1), time], 
-    event_observed_A = df.loc[(df[treatment] == 0), outcome], 
-    event_observed_B = df.loc[(df[treatment] == 1), outcome],
-    # weights_A = df.loc[(df[treatment] == 0), 'weight'], weights_B = df.loc[(df[treatment] == 1), 'weight']
-    )
-    print(logrank1)
-
-    # Set the limits of the X-axis
-    ax.set_xlim(0, max_month)
-    ax.set_xticks(np.linspace(0, max_month, max_month+1))
-    ax.set_xlabel(x_axis_label)
-    # ax.set_ylim(0, 0.17)
-
-    # Save the X-axis labels
-    # labels = ax.get_xticklabels()
-    # labels = ax.get_xticks() # We use xticks since the Xaxis is numeric
-    
-    # # Add legend
-    # ax.legend([control_group_label, treatment_group_label])
-
-    
-    
-    ####### FINAL PLOT EDITS ###################
-    ax.set_title(inset_title)
-    plt.suptitle(title, fontsize = 12, fontweight = 'bold')
-    ax.set_ylabel('Cumulative Incidence (%)')
-    plt.show()
-
-    return df
-    
-
-@transform_pandas(
-    Output(rid="ri.vector.main.execute.c7910370-b8b3-45d8-abd6-b6f00fdb1d55"),
-    paxlovid_long_covid_coxreg_prep=Input(rid="ri.foundry.main.dataset.c1562765-12f3-4715-baa4-c02852eabc73")
-)
-def Paxlovid_KM_Curve_LongCovid(paxlovid_long_covid_coxreg_prep):
-
-    time = 'long_covid_time'
-    event = 'outcome'
-    title = 'Risk of Long COVID'
-    inset_title = 'By 180 days'
-    treatment_group_label = 'Paxlovid'
-    control_group_label = 'Untreated'
-    x_axis_label = 'Day'
-
-    #################
-    treatment = 'treatment'
-
-    df = paxlovid_long_covid_coxreg_prep
-    df = df.select('person_id',treatment,time,event).toPandas()
-    
-    
-
-    #### STEP 1 - GET THE LIFETABLE - N AT RISK
-    from lifelines.utils import survival_table_from_events
-    from lifelines import NelsonAalenFitter, KaplanMeierFitter
-    from matplotlib.gridspec import GridSpec
-    import matplotlib.table as tbl
-    from lifelines.plotting import add_at_risk_counts
-    
-    fig, ax = plt.subplots(1,1, figsize = (6,5))
-    set_output_image_type('svg')
-
-    ###### 1. PLOT FOR EARLY TREATMENT ("person_id","weight","treatment","time","outcome")
-    # First plot no treatment
-    f1 = KaplanMeierFitter()
-    f1.fit(durations = df.loc[(df[treatment] == 0), time], 
-    event_observed = df.loc[(df[treatment] == 0), event],
-    label = control_group_label, 
-    # weights = df.loc[(df[treatment] == 0), 'weight'], 
-    )
-
-    # Plot the cumulative density for 1 group
-    f1.plot_cumulative_density(ax = ax, ci_show = True)
-
-    
-
-    ############### Get lifetable
-    table1 = survival_table_from_events(death_times = df.loc[(df[treatment] == 0), time], 
-                                    event_observed = df.loc[(df[treatment] == 0), event],
-    #                                    intervals = 4
-                                        )
-
-    ### GET CUMULATIVE EVENTS AND PERCENT DIED
-    final_events1 = pd.DataFrame(table1.agg({'at_risk': lambda x: x.iloc[1], 'observed':np.sum})).T
-    final_events1['percent'] = (final_events1['observed'] / final_events1['at_risk'])*100
-    final_events1['group'] = control_group_label
-    print(final_events1)
-    ################################
-
-    # Next plot the treatment group
-    f2 = KaplanMeierFitter()
-    f2.fit(durations = df.loc[(df[treatment] == 1), time], 
-    event_observed = df.loc[(df[treatment] == 1), event],
-    label = treatment_group_label, 
-    # weights = df.loc[(df[treatment] == 1), 'weight']
-    )
-
-    # Plot the cumulative density for 1 group
-    f2.plot_cumulative_density(ax = ax, ci_alpha = 0.1, ci_show = True)
-
-    ############### Get lifetable
-    table2 = survival_table_from_events(death_times = df.loc[(df[treatment] == 1), time], 
-                                    event_observed = df.loc[(df[treatment] == 1), event],
-    #                                    intervals = 4
-                                        )
-
-    ### GET CUMULATIVE EVENTS AND PERCENT DIED
-    final_events2 = pd.DataFrame(table2.agg({'at_risk': lambda x: x.iloc[1], 'observed':np.sum})).T
-    final_events2['percent'] = (final_events2['observed'] / final_events2['at_risk'])*100
-    final_events2['group'] = treatment_group_label
-    print(final_events2)
-    ################################
-
-    from lifelines.statistics import logrank_test
-    logrank1 = logrank_test(df.loc[(df[treatment] == 0), time], 
-    df.loc[(df[treatment] == 1), time], 
-    event_observed_A = df.loc[(df[treatment] == 0), event], 
-    event_observed_B = df.loc[(df[treatment] == 1), event],
-    # weights_A = df.loc[(df[treatment] == 0), 'weight'], weights_B = df.loc[(df[treatment] == 1), 'weight']
-    )
-    print(logrank1)
-
-    # Set the limits of the X-axis
-    ax.set_xlim(0, 180)
-    ax.set_xticks(np.linspace(0, 180, 10))
-    ax.set_xlabel(x_axis_label)
-    # ax.set_ylim(0, 0.17)
-
-    # Save the X-axis labels
-    # labels = ax.get_xticklabels()
-    # labels = ax.get_xticks() # We use xticks since the Xaxis is numeric
-    
-    # # Add legend
-    # ax.legend([control_group_label, treatment_group_label])
-
-    
-    
-    ####### FINAL PLOT EDITS ###################
-    ax.set_title(inset_title)
-    plt.suptitle(title, fontsize = 12, fontweight = 'bold')
-    ax.set_ylabel('Cumulative Incidence (%)')
-    plt.show()
-
-    ####### FINAL PLOT EDITS ###################
-    ax.set_title(inset_title)
-    plt.suptitle(title, fontsize = 12, fontweight = 'bold')
-    ax.set_ylabel('Cumulative Incidence (%)')
-    plt.show()
-
-    outcome = 'Long COVID'
-
-    dffinal = pd.concat([
-	final_events1, 
-	final_events2, 
-	# final_events3, 
-	# final_events4, 
-	# final_events5, 
-	# final_events6
-	])
-    dffinal['drug'] = treatment_group_label
-    dffinal['outcome'] = outcome
-    # set_output_image_type('svg')
-    # return dffinal
-    
-    return dffinal
+    print(np.mean(df['max_trial']))
     
 
 @transform_pandas(
@@ -1457,14 +2303,14 @@ from pyspark.sql import functions as F
 
 @transform_pandas(
     Output(rid="ri.foundry.main.dataset.ff6099cf-f640-4e55-a82b-5d99a236d3f2"),
-    expanded_dataset_for_outcome_analysis_matching=Input(rid="ri.foundry.main.dataset.32ef28d9-6ad8-4b41-8a63-c6e4e37036d9")
+    expanded_dataset_for_outcome_analysis_matching_severeillness=Input(rid="ri.foundry.main.dataset.b1bb6db2-cbe3-440f-bfea-a03c73680556")
 )
 # Cox Regression - Paxlovid - Sequential Trial (64596fdc-a471-4aab-91ad-0bb836f1e552): v1
-def coxreg_prep_matching_composite(expanded_dataset_for_outcome_analysis_matching):
+def coxreg_prep_matching_composite(expanded_dataset_for_outcome_analysis_matching_severeillness):
     
     outcome = 'composite'
     time_end = 14
-    df = expanded_dataset_for_outcome_analysis_matching.select('treatment','person_id','subclass','row_id','{}_time{}'.format(outcome, time_end),'{}{}'.format(outcome, time_end)).where(expr('time = 1'))
+    df = expanded_dataset_for_outcome_analysis_matching_severeillness.select('treatment','person_id','subclass','row_id','{}_time{}'.format(outcome, time_end),'{}{}'.format(outcome, time_end)).where(expr('time = 1'))
 
     return df
     
@@ -1519,7 +2365,7 @@ pd.set_option('display.width', 1000)
 # Cox Regression - Paxlovid - Sequential Trial (64596fdc-a471-4aab-91ad-0bb836f1e552): v1
 def coxreg_prep_matching_composite_death_hosp(expanded_dataset_for_outcome_analysis_matching_compositedeathhosp):
     
-    outcome = 'composite_death_hosp'
+    outcome = 'hosp_death_competing'
     time_end = 14
     df = expanded_dataset_for_outcome_analysis_matching_compositedeathhosp.select('treatment','person_id','subclass','row_id','{}_time{}'.format(outcome, time_end),'{}{}'.format(outcome, time_end)).where(expr('time = 1'))
 
@@ -1628,14 +2474,14 @@ pd.set_option('display.width', 1000)
 
 @transform_pandas(
     Output(rid="ri.foundry.main.dataset.edd4f694-66db-4176-bde5-06d64e098f7b"),
-    expanded_dataset_for_outcome_analysis_matching_modcomposite=Input(rid="ri.foundry.main.dataset.1a14ee76-280e-46a0-8072-d3adea949e40")
+    expanded_dataset_for_outcome_analysis_matching_deathhosp=Input(rid="ri.foundry.main.dataset.1a14ee76-280e-46a0-8072-d3adea949e40")
 )
 # Cox Regression - Paxlovid - Sequential Trial (64596fdc-a471-4aab-91ad-0bb836f1e552): v1
-def coxreg_prep_matching_mod_composite(expanded_dataset_for_outcome_analysis_matching_modcomposite):
+def coxreg_prep_matching_deathhosp(expanded_dataset_for_outcome_analysis_matching_deathhosp):
     
-    outcome = 'mod_composite'
+    outcome = 'composite_death_hosp'
     time_end = 14
-    df = expanded_dataset_for_outcome_analysis_matching_modcomposite.select('treatment','person_id','subclass','row_id','{}_time{}'.format(outcome, time_end),'{}{}'.format(outcome, time_end)).where(expr('time = 1'))
+    df = expanded_dataset_for_outcome_analysis_matching_deathhosp.select('treatment','person_id','subclass','row_id','{}_time{}'.format(outcome, time_end),'{}{}'.format(outcome, time_end)).where(expr('time = 1'))
 
     return df
     
@@ -2221,12 +3067,360 @@ def eligible_sample_EHR_all(long_dataset_all, cohort_facts_visit_level_paxlovid,
     
 
 @transform_pandas(
-    Output(rid="ri.foundry.main.dataset.32ef28d9-6ad8-4b41-8a63-c6e4e37036d9"),
+    Output(rid="ri.foundry.main.dataset.bcaab999-6bf7-4941-9e6f-b2512c08fcf6"),
+    cohort_code=Input(rid="ri.foundry.main.dataset.b6450c6b-55d3-41e3-8208-14fa0780cd41"),
+    cohort_facts_visit_level_paxlovid=Input(rid="ri.foundry.main.dataset.63c6f325-61d9-4e4f-acc2-2e9e6c301adc"),
+    long_dataset_all_consort=Input(rid="ri.foundry.main.dataset.09e12ea9-44cd-4882-9cda-3d828b2c0f4b")
+)
+def eligible_sample_EHR_all_person_trials(long_dataset_all_consort, cohort_facts_visit_level_paxlovid, cohort_code):
+    cohort_facts_visit_level_paxlovid = cohort_facts_visit_level_paxlovid
+
+    cohort_facts_visit_level_covid_out = cohort_facts_visit_level_paxlovid
+    treatment_column = 'paxlovid_treatment'
+    long_dataset = long_dataset_all_consort
+    sample = 'at_risk_severe_covid'
+    drop_patients_without_sdoh = True
+    drop_patients_without_recent_EGFR = True
+    drop_patients_without_BMI = True
+
+    # optional categorizations
+    include_variant = True
+    categorize_variant = False
+    convert_continuous_columns_to_categorical = True
+    convert_age_to_categorical = True
+
+    # Limit to top Data Partners or 3 trials
+    limit_top_dp = True
+    limit_to_3_trials = False
+    # top_data_partners = [726,399,569,793,134,376,217,939,655,819,507,102,526,688,207] # version 1
+    top_data_partners = [726,569,399,376,819,102,134,526,688,655,939,507,207,770,406] # version 2 - based on new sample; 
+
+    # Calculate CCI
+    long_dataset = long_dataset.withColumn('CCI', expr('cci_index_covariate_mi_LVCF + cci_index_covariate_chf_LVCF + cci_index_covariate_pvd_LVCF + cci_index_covariate_cvd_LVCF + cci_index_covariate_dem_LVCF + cci_index_covariate_cpd_LVCF + cci_index_covariate_rd_LVCF + cci_index_covariate_pep_LVCF + cci_index_covariate_liv_LVCF + cci_index_covariate_dia_LVCF + cci_index_covariate_hem_LVCF + cci_index_covariate_ren_LVCF + cci_index_covariate_can_LVCF + cci_index_covariate_hiv_LVCF'))
+
+    long_dataset = long_dataset.withColumnRenamed('sdoh2_by_preferred_county_LVCF','SDOH')
+    
+    # long_dataset = long_dataset.withColumn('CCI', expr('cci_index_covariate_mi + cci_index_covariate_chf + cci_index_covariate_pvd + cci_index_covariate_cvd + cci_index_covariate_dem + cci_index_covariate_cpd + cci_index_covariate_rd + cci_index_covariate_pep + cci_index_covariate_liv + cci_index_covariate_dia + cci_index_covariate_hem + cci_index_covariate_ren + cci_index_covariate_can + cci_index_covariate_hiv'))
+
+    dropcols = [column for column in long_dataset.columns if 'cci_index_covariate' in column]
+    long_dataset = long_dataset.drop(*dropcols)
+
+    # Now we can identify who is eligible
+    # We have already removed patients who were treated before COVID
+    follow_up_length = 28
+    hospitalization_free_period = 10
+    include_ED = True
+    death_look_forward = 1
+    grace_period = 5
+
+    # 1. Remove patients AFTER they have already been treated. For this study, patients are only able to enter a trial in which they were treated. So remove anyone who was not treated with anything
+    df = long_dataset.where(expr('day <= {}'.format(grace_period)))
+    print('minimal sample', print(df.select(count(col('person_id'))).toPandas()))
+    dropcols = [column for column in df.columns if 'exclusion_contraindication' in column]
+    print(dropcols)
+
+    # Remove patients without BMI
+    if drop_patients_without_BMI:
+        try:
+            df = df.where('MISSING_covariate_BMI_LVCF <> 1')
+        except:
+            None
+        print('patient does NOT have missing BMI', print(df.select(count(col('person_id'))).toPandas()))
+    else:
+        bmi_columns = [column for column in df.columns if 'covariate_BMI' in column]
+        df = df.drop(*bmi_columns)
+    
+
+    # Patient has an EGFR measure in the prior 365 days;
+    if drop_patients_without_recent_EGFR:
+        df = df.where('EGFR_current_LVCF IS NOT NULL')
+        print('patient has EGFR measured in the past 12 mo', print(df.select(count(col('person_id'))).toPandas()))
+
+    # Person is 30 by trial day
+    df = df.withColumn('age', expr('DATEDIFF(date, date_of_birth) / 365.25')).where('age >= 18')
+    print('Patient is 18+', print(df.select(count(col('person_id'))).toPandas()))
+
+    # # Exclude patients once they get treated
+    df = df.where(expr('treated <= 1'))
+    print('patient has not received treatment previously', print(df.select(count(col('person_id'))).toPandas()))
+
+    #. 2. Remove ALL rows from 1-day before the patient dies
+    df = df.where(expr('(death_date IS NULL) OR (date < DATE_ADD(death_date, -{}) ) '.format(death_look_forward)))
+    print('patient does not die within 24h of eligibility', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 2.1 Repeat for hospitalization - remove patients who were hospitalized 10 days before the current trial date
+    # That is, keep dates that occur at least 30 days after the most recent hospitalization preCOVID
+    df = df.where(expr('(DATE_ADD(date, -{pre_covid_hosp_period}) > hospitalization_date_pre_covid) OR (hospitalization_date_pre_covid IS NULL)'.format(pre_covid_hosp_period = hospitalization_free_period))).drop('hospitalization_date_pre_covid')
+    print('patient does not get hospitalized 10 days before COVID', print(df.select(count(col('person_id'))).toPandas()))
+    
+    # 2.2 As we did for death, remove all rows from 1-day before the patient is hospitalized. 
+    df = df.where(expr('(date < DATE_ADD(hospitalization_date_post_covid, -{}) ) OR (hospitalization_date_post_covid IS NULL)'.format(death_look_forward)))
+    print('patient does not get hospitalized within 24h of eligibility', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 2.1 Repeat for ED visit - remove patients who had an ED visit 30 days before the current trial date
+    # That is, keep dates that occur at least 30 days after the most recent hospitalization preCOVID
+    if include_ED:
+        df = df.where(expr('(DATE_ADD(date, -{pre_covid_hosp_period}) > EDvisit_date_pre_covid) OR (EDvisit_date_pre_covid IS NULL)'.format(pre_covid_hosp_period = hospitalization_free_period))).drop('EDvisit_date_pre_covid')
+        
+        # 2.2 As we did for death, remove all rows from 1-day before the patient is ED. 
+        df = df.where(expr('(date < DATE_ADD(EDvisit_date_post_covid, -{}) ) OR (EDvisit_date_post_covid IS NULL)'.format(death_look_forward)))
+        print('patient not ED visit within 24 hours', print(df.select(count(col('person_id'))).toPandas()))
+
+        ###### NEW CODE Feb 18th
+        # 2.3 We will repeat the above for supplemental oxygen; Apply same 10 day restriction 
+        df = df.where(expr('(DATE_ADD(date, -{pre_covid_hosp_period}) > oxygen_date_pre_covid) OR (oxygen_date_pre_covid IS NULL)'.format(pre_covid_hosp_period = hospitalization_free_period))).drop('EDvisit_date_pre_covid')
+        
+        # 2.4 As we did for death, remove all rows from 1-day before the patient is ED. 
+        df = df.where(expr('(date < DATE_ADD(oxygen_date_post_covid, -{}) ) OR (oxygen_date_post_covid IS NULL)'.format(death_look_forward)))
+        print('patient does not receive supplemental oxygen within 24h', print(df.select(count(col('person_id'))).toPandas()))
+
+    #. 3. Identify if the patient has at least 30 days of data remaining at each trial. Remove all rows where the patient has < 30 days of data remaining
+    df = df.withColumn('remaining_days_of_data', expr('DATEDIFF(end_day, date) + 1')).withColumn('remaining_days_of_data', expr('CASE WHEN remaining_days_of_data > {follow_up} THEN {follow_up} ELSE remaining_days_of_data END'.format(follow_up = follow_up_length)))
+    df = df.withColumn('remaining_days_of_data_actual', expr('DATEDIFF(end_day, date) + 1'))
+    df = df.where(expr('remaining_days_of_data >= {}'.format(follow_up_length)))
+    print('patient has at least 28 days of follow up data', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 3B. Identify patients with at least 365 days of observation
+    df = df.withColumn('observation_period', expr('DATEDIFF(date, first_visit)')).where(expr('observation_period >= 365'))
+    print('patient has at least 365 days of pre trial data', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 5. Limit to data partners with at least 1 ELIGIBLE patient who was treated. 'treatment' is TIME INVARIANT in this node; we will drop this.
+    df = df.withColumn('treatment', expr('MAX(treated) OVER(PARTITION BY person_id)'))
+    untreated_df = df.select('person_id','treatment','data_partner_id').distinct().groupBy(col('data_partner_id')).agg( (sum(col('treatment')) / countDistinct(col('person_id'))).alias('proportion_treated'),  sum(col('treatment')).alias('number_treated') ).where(expr('number_treated >= 1'))
+    df = df.join(untreated_df, on = 'data_partner_id', how = 'inner').drop('treatment','proportion_treated','number_treated')
+    print('patient from data partner with at least 1 patient treated', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 6. Exclude patients based on eligibility criteria
+    other_covid_treatment_columns = [column for column in df.columns if ('covid19_treatment' in column) & ('LVCF' in column)]
+    contraindication_condition_columns = [column for column in df.columns if ('exclusion_contraindication_condition' in column) & ('LVCF' in column)]
+    contraindication_drug_columns = [column for column in df.columns if ('exclusion_contraindication_drug' in column) & ('LVCF' in column)]
+       
+    # Create strings of the columns in each group
+    contraindication_drug_columns_string = ','.join(contraindication_drug_columns)
+    contraindication_condition_columns_string = ','.join(contraindication_condition_columns)
+    other_covid_treatment_columns_string = ','.join(other_covid_treatment_columns)
+
+    # # APPLY EXCLUSIONS INCREMENTALLY
+    # # Indications
+    # df = df.withColumn('has_indication', expr('GREATEST({columns})'.format(columns = indication_columns_string))).where(expr('has_indication <> 1'))
+    # print('Patient has no indications (conditions) for Diabetes', print(df.select(count(col('person_id'))).toPandas()))
+
+    # Drug Contraindications
+    df = df.withColumn('has_contraindication_drug', expr('GREATEST({columns})'.format(columns = contraindication_drug_columns_string))).where(expr('has_contraindication_drug <> 1'))
+    print('Patient has no contraindications drugs', print(df.select(count(col('person_id'))).toPandas()))
+
+    # Condition Contraindications. This includes EGFR
+    df = df.withColumn('has_contraindication_condition', expr('GREATEST({columns})'.format(columns = contraindication_condition_columns_string))).where(expr('has_contraindication_condition <> 1'))
+    print('Patient has no contraindications conditions', print(df.select(count(col('person_id'))).toPandas()))
+
+    # Other COVID tmts
+    df = df.withColumn('has_other_covid_tmts', expr('GREATEST({columns})'.format(columns = other_covid_treatment_columns_string))).where(expr('has_other_covid_tmts <> 1'))
+    print('Patient not exposed to any other COVID tx', print(df.select(count(col('person_id'))).toPandas()))
+
+    #### APPLY INCLUSIONS #######
+    age_risk_factor = 65
+    df = df.withColumn('Age', expr('DATEDIFF(date, date_of_birth)/365.25'))
+    df = df.withColumn('age_risk_factor_LVCF', expr('CASE WHEN Age >= {} THEN 1 ELSE 0 END'.format(age_risk_factor)))
+    risk_factors_severe_covid = ["age_risk_factor_LVCF","cancer_risk_factor_LVCF","cerebrovascular_disease_risk_factor_LVCF","chronic_kidney_disease_risk_factor_LVCF","liver_disease_risk_factor_LVCF","lung_disease_risk_factor_LVCF","cystic_fibrosis_risk_factor_LVCF","dementia_risk_factor_LVCF","diabetes_mellitus_risk_factor_LVCF","disability_risk_factor_LVCF","heart_disease_risk_factor_LVCF","hemoglobin_blood_disorder_risk_factor_LVCF","hiv_risk_factor_LVCF","mental_health_disorder_risk_factor_LVCF","obesity_overweight_risk_factor_LVCF","immunocompromised_risk_factor_LVCF","immunosuppressive_therapy_risk_factor_LVCF","corticosteroid_use_risk_factor_LVCF","tuberculosis_risk_factor_LVCF","substance_abuse_risk_factor_LVCF","smoking_risk_factor_LVCF"]
+    risk_factors_severe_covid_string = ','.join(risk_factors_severe_covid)
+    df = df.withColumn('at_risk_severe_covid', expr('GREATEST({})'.format(risk_factors_severe_covid_string)))
+    
+    if sample == 'at_risk_severe_covid':
+        df = df.where(expr('at_risk_severe_covid = 1'))
+        print('Patient is at risk of Severe COVID-19', print(df.select(count(col('person_id'))).toPandas()))
+    
+    df = df.drop('Age','age_risk_factor_LVCF')
+
+    if drop_patients_without_sdoh == True:
+        df = df.dropna(subset = ['SDOH'])
+        print('Patient has SDOH index data', print(df.select(count(col('person_id'))).toPandas()))
+
+    ################# Calculate time to event columns ##############################
+    # Rename all date columns
+    df = df.withColumnRenamed('hospitalization_date_post_covid','hospitalization_date').withColumnRenamed('EDvisit_date_post_covid','EDvisit_date')
+    ###### NEW CODE Feb 18th
+    df = df.withColumnRenamed('oxygen_date_post_covid','oxygen_date')
+
+    include_ED = True
+    outcome_date_columns = [
+        "death_date",
+        "hospitalization_date",
+    ]
+
+    if include_ED:
+        outcome_date_columns += ['EDvisit_date']
+
+        ###### NEW CODE Feb 18th
+        outcome_date_columns += ['oxygen_date']
+    
+    # Create composite column
+    df = df.withColumn('composite_date', expr('LEAST({})'.format(','.join(outcome_date_columns))))
+
+    # Begin for death
+    df = df.withColumn('death', expr('CASE WHEN death_date IS NOT NULL THEN 1 ELSE 0 END'))
+    df = df.withColumn('death_time', expr('CASE WHEN death = 1 THEN DATEDIFF(death_date, date) + 1 ELSE DATEDIFF(end_day, date) + 1 END'))
+
+    df = df.withColumn('death60', expr('CASE WHEN death_date IS NOT NULL AND death_time <= 60 THEN 1 ELSE 0 END'))
+    df = df.withColumn('death_time60', expr('CASE WHEN death_time <= 60 THEN death_time ELSE 60 END'))
+
+    df = df.withColumn('death28', expr('CASE WHEN death_date IS NOT NULL AND death_time <= 28 THEN 1 ELSE 0 END'))
+    df = df.withColumn('death_time28', expr('CASE WHEN death_time <= 28 THEN death_time ELSE 28 END'))
+
+    df = df.withColumn('death14', expr('CASE WHEN death_date IS NOT NULL AND death_time <= 14 THEN 1 ELSE 0 END'))
+    df = df.withColumn('death_time14', expr('CASE WHEN death_time <= 14 THEN death_time ELSE 14 END'))
+
+    # Hospitalization
+    df = df.withColumn('hospitalization', expr('CASE WHEN hospitalization_date IS NOT NULL THEN 1 ELSE 0 END'))
+    df = df.withColumn('hospitalization_time', expr('CASE WHEN hospitalization = 1 THEN DATEDIFF(hospitalization_date, date) + 1 ELSE DATEDIFF(end_day, date) + 1 END'))
+
+    df = df.withColumn('hospitalization60', expr('CASE WHEN hospitalization_date IS NOT NULL AND hospitalization_time <= 60 THEN 1 ELSE 0 END'))
+    df = df.withColumn('hospitalization_time60', expr('CASE WHEN hospitalization_time <= 60 THEN hospitalization_time ELSE 60 END'))
+
+    df = df.withColumn('hospitalization28', expr('CASE WHEN hospitalization_date IS NOT NULL AND hospitalization_time <= 28 THEN 1 ELSE 0 END'))
+    df = df.withColumn('hospitalization_time28', expr('CASE WHEN hospitalization_time <= 28 THEN hospitalization_time ELSE 28 END'))
+
+    df = df.withColumn('hospitalization14', expr('CASE WHEN hospitalization_date IS NOT NULL AND hospitalization_time <= 14 THEN 1 ELSE 0 END'))
+    df = df.withColumn('hospitalization_time14', expr('CASE WHEN hospitalization_time <= 14 THEN hospitalization_time ELSE 14 END'))
+
+    # # EDvisit
+    if include_ED:
+        df = df.withColumn('EDvisit', expr('CASE WHEN EDvisit_date IS NOT NULL THEN 1 ELSE 0 END'))
+        df = df.withColumn('EDvisit_time', expr('CASE WHEN EDvisit = 1 THEN DATEDIFF(EDvisit_date, date) + 1 ELSE DATEDIFF(end_day, date) + 1 END'))
+
+        df = df.withColumn('EDvisit60', expr('CASE WHEN EDvisit_date IS NOT NULL AND EDvisit_time <= 60 THEN 1 ELSE 0 END'))
+        df = df.withColumn('EDvisit_time60', expr('CASE WHEN EDvisit_time <= 60 THEN EDvisit_time ELSE 60 END'))
+
+        df = df.withColumn('EDvisit28', expr('CASE WHEN EDvisit_date IS NOT NULL AND EDvisit_time <= 28 THEN 1 ELSE 0 END'))
+        df = df.withColumn('EDvisit_time28', expr('CASE WHEN EDvisit_time <= 28 THEN EDvisit_time ELSE 28 END'))
+
+        df = df.withColumn('EDvisit14', expr('CASE WHEN EDvisit_date IS NOT NULL AND EDvisit_time <= 14 THEN 1 ELSE 0 END'))
+        df = df.withColumn('EDvisit_time14', expr('CASE WHEN EDvisit_time <= 14 THEN EDvisit_time ELSE 14 END'))
+
+        ######## NEW CODE - SUPPLEMENTAL OXYGEN
+        df = df.withColumn('oxygen', expr('CASE WHEN oxygen_date IS NOT NULL THEN 1 ELSE 0 END'))
+        df = df.withColumn('oxygen_time', expr('CASE WHEN oxygen = 1 THEN DATEDIFF(oxygen_date, date) + 1 ELSE DATEDIFF(end_day, date) + 1 END'))
+
+        df = df.withColumn('oxygen60', expr('CASE WHEN oxygen_date IS NOT NULL AND oxygen_time <= 60 THEN 1 ELSE 0 END'))
+        df = df.withColumn('oxygen_time60', expr('CASE WHEN oxygen_time <= 60 THEN oxygen_time ELSE 60 END'))
+
+        df = df.withColumn('oxygen28', expr('CASE WHEN oxygen_date IS NOT NULL AND oxygen_time <= 28 THEN 1 ELSE 0 END'))
+        df = df.withColumn('oxygen_time28', expr('CASE WHEN oxygen_time <= 28 THEN oxygen_time ELSE 28 END'))
+
+        df = df.withColumn('oxygen14', expr('CASE WHEN oxygen_date IS NOT NULL AND oxygen_time <= 14 THEN 1 ELSE 0 END'))
+        df = df.withColumn('oxygen_time14', expr('CASE WHEN oxygen_time <= 14 THEN oxygen_time ELSE 14 END'))
+
+    # Composite
+    df = df.withColumn('composite', expr('CASE WHEN composite_date IS NOT NULL THEN 1 ELSE 0 END'))
+    df = df.withColumn('composite_time', expr('CASE WHEN composite = 1 THEN DATEDIFF(composite_date, date) + 1 ELSE DATEDIFF(end_day, date) + 1 END'))
+
+    df = df.withColumn('composite60', expr('CASE WHEN composite_date IS NOT NULL AND composite_time <= 60 THEN 1 ELSE 0 END'))
+    df = df.withColumn('composite_time60', expr('CASE WHEN composite_time <= 60 THEN composite_time ELSE 60 END'))
+
+    df = df.withColumn('composite28', expr('CASE WHEN composite_date IS NOT NULL AND composite_time <= 28 THEN 1 ELSE 0 END'))
+    df = df.withColumn('composite_time28', expr('CASE WHEN composite_time <= 28 THEN composite_time ELSE 28 END'))
+
+    df = df.withColumn('composite14', expr('CASE WHEN composite_date IS NOT NULL AND composite_time <= 14 THEN 1 ELSE 0 END'))
+    df = df.withColumn('composite_time14', expr('CASE WHEN composite_time <= 14 THEN composite_time ELSE 14 END'))
+
+    # Create overall treatment column. Treatment is NOW time varying. 
+    df = df.withColumn('treatment', expr('CASE WHEN {} = 1 THEN 1 ELSE 0 END'.format(treatment_column)))
+
+    ##################### INCLUDE THE VISITS; AND CONVERT TO DUMMIES ####################################################
+    visit_counts = cohort_code.select('person_id','total_ED_visits_before_covid','total_hosp_visits_before_covid','total_visits').fillna(0)
+    df = df.join(visit_counts, on = 'person_id', how = 'inner')
+    
+    # Convert these columns include age into categorical
+    intervals = 7
+    if convert_continuous_columns_to_categorical: 
+        for column in ['total_ED_visits_before_covid','total_hosp_visits_before_covid','total_visits','CCI','SDOH']:
+            df = df.withColumn(column, expr('NTILE({}) OVER(ORDER BY {})'.format(intervals, column)))
+
+        # Convert to dummies
+        for column in ['total_ED_visits_before_covid','total_hosp_visits_before_covid','total_visits','CCI','SDOH']:
+            category_levels = df.select(column).distinct().toPandas()
+            category_levels = category_levels[column].tolist()
+            category_levels = [cat for cat in category_levels if cat != 1] # don't include level 1
+            category_levels_columns = []
+            for level in category_levels:
+                df = df.withColumn('covariate_{}_{}_LVCF'.format(column, level), expr('CASE WHEN {} = {} THEN 1 ELSE 0 END'.format(column, level)))
+                category_levels_columns.append('covariate_{}_{}_LVCF'.format(column, level))
+            df = df.drop(column)
+
+    else:
+
+        for column in ['total_ED_visits_before_covid','total_hosp_visits_before_covid','total_visits','CCI','SDOH']:
+            df = df.withColumnRenamed(column, 'covariate_{}_LVCF'.format(column))
+
+    # Convert to dummies (do this separate for age, because I don't want to add the 'covariate_' prefix to it)
+    if convert_age_to_categorical:
+        for column in ['age_at_covid']:
+            df = df.withColumn(column, expr('NTILE({}) OVER(ORDER BY {})'.format(intervals, column)))
+            category_levels = df.select(column).distinct().toPandas()
+            category_levels = category_levels[column].tolist()
+            category_levels = [cat for cat in category_levels if cat != 1] # don't include level 1
+            category_levels_columns = []
+            for level in category_levels:
+                df = df.withColumn('{}_{}'.format(column, level), expr('CASE WHEN {} = {} THEN 1 ELSE 0 END'.format(column, level)))
+                category_levels_columns.append('{}_{}'.format(column, level))
+            df = df.drop(column)
+
+    # # Drop irrelevant indicators; 
+    # df = df.drop("covariate_total_ED_visits_before_covid_1_LVCF","covariate_total_hosp_visits_before_covid_1_LVCF","covariate_total_visits_1_LVCF","age_at_covid_1")
+    df = df.drop('observation_period_before_covid')
+
+    # Add Variant #
+    # Create indicators for COVID-era variant
+    #### NEW CODE: ERA: https://www.verywellhealth.com/covid-variants-timeline-6741198#toc-b11529-omicron
+    if include_variant:
+        df = df.withColumn('variant', expr('CASE \
+        WHEN COVID_index_date < "2021-03-01" THEN "PREALPHA" \
+        WHEN COVID_index_date < "2021-07-01" THEN "ALPHA" \
+        WHEN COVID_index_date < "2021-12-16" THEN "DELTA" \
+        WHEN COVID_index_date < "2022-10-01" THEN "OMICRON_BA2" \
+        WHEN COVID_index_date < "2023-07-01" THEN "OMICRON_X" \
+        WHEN COVID_index_date < "2024-01-01" THEN "OMICRON_E_HV" \
+        WHEN COVID_index_date >= "2024-01-01" THEN "OMICRON_LATE" \
+        ELSE "OTHER" END'))
+    
+    variant_columns = []
+    if categorize_variant:
+        variants = df.select('variant').distinct().toPandas()
+        variants = variants['variant'].tolist()
+        for variant in variants:
+            df = df.withColumn('covariate_variant_{}_LVCF'.format(variant), expr('CASE WHEN variant = "{}" THEN 1 ELSE 0 END'.format(variant)))
+            variant_columns.append('covariate_variant_{}_LVCF'.format(variant))
+        df = df.drop('variant')
+
+    # Drop all the exclusion contraindication columns we don't need them
+    dropcols = [column for column in df.columns if 'exclusion_contraindication' in column]
+    df = df.drop(*dropcols)
+
+    ############################
+    # Limit to top data partners
+    if limit_top_dp:
+        df = df.where(col('data_partner_id').isin(top_data_partners))
+        print('Top Data Partner - 80% of all treated patients', print(df.select(count(col('person_id'))).toPandas()))
+    if limit_to_3_trials:
+        df = df.where(expr('trial <= 3'))
+    ############################
+
+    ############################
+    if drop_patients_without_sdoh == False:
+        # If we keep patients without SDOH then we need to drop the SDOH columns
+        sdoh_columns = [column for column in df.columns if 'SDOH' in column]
+        df = df.drop(*sdoh_columns)
+    
+    return df
+
+    
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.1b4818d5-123b-4f59-a7b8-a341d2330a85"),
     nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
     propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
 )
-# Set up expanded data for DTSA (Matching) (d03cbe59-1be7-4e54-bffe-040d39ce84f7): v1
-def expanded_dataset_for_outcome_analysis_matching( nearest_neighbor_matching_all, propensity_model_prep_expanded):
+# Set up expanded data for DTSA (Matching) (d03cbe59-1be7-4e54-bffe-040d39ce84f7): v6
+def expanded_dataset_for_outcome_analysis_matching_compositedeathhosp( nearest_neighbor_matching_all, propensity_model_prep_expanded):
 
     # The purpose of this node is to expand the dataset for discrete time survival analysis; and to set up the dataset for Cox regression; 
 
@@ -2234,7 +3428,7 @@ def expanded_dataset_for_outcome_analysis_matching( nearest_neighbor_matching_al
     grace_period = 5
     time_end = 14
     follow_up_length = time_end
-    outcome = 'composite'
+    outcome = 'hosp_death_competing'
     original_trial_column = 'day'
     outcome_columns = ['{}{}'.format(outcome, time_end), '{}_date'.format(outcome), '{}_time{}'.format(outcome, time_end)]
     outcome_date = '{}_date'.format(outcome)
@@ -2333,12 +3527,91 @@ pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
 @transform_pandas(
-    Output(rid="ri.foundry.main.dataset.1b4818d5-123b-4f59-a7b8-a341d2330a85"),
+    Output(rid="ri.foundry.main.dataset.29ec35e9-647a-4154-8029-5aa5a5a2de51"),
+    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb"),
     nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
     propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
 )
 # Set up expanded data for DTSA (Matching) (d03cbe59-1be7-4e54-bffe-040d39ce84f7): v1
-def expanded_dataset_for_outcome_analysis_matching_compositedeathhosp( nearest_neighbor_matching_all, propensity_model_prep_expanded):
+def expanded_dataset_for_outcome_analysis_matching_copied_1( nearest_neighbor_matching_all, propensity_model_prep_expanded, eligible_sample_EHR_all):
+
+    # The purpose of this node is to expand the dataset for discrete time survival analysis; and to set up the dataset for Cox regression; 
+
+    # 1. Create a cross join between person id and days up to day 14; 
+    grace_period = 5
+    time_end = 14
+    follow_up_length = time_end
+    outcome = 'composite'
+    original_trial_column = 'day'
+    outcome_columns = ['{}{}'.format(outcome, time_end), '{}_date'.format(outcome), '{}_time{}'.format(outcome, time_end)]
+    outcome_date = '{}_date'.format(outcome)
+    weight_column = 'IPTW_ATT'
+    
+    # Create the cross join
+    days = np.arange(1, time_end + grace_period + 1)
+    days_df = pd.DataFrame({'time': days})
+    days_df = spark.createDataFrame(days_df)
+    person_df = nearest_neighbor_matching_all.select('person_id').distinct()
+    full_join = person_df.join(days_df)
+    
+    # 2. Join the matching output to the cross join on person_id only - so that each person gets 30 days
+    df = nearest_neighbor_matching_all.select('person_id','day','date','trial','subclass','distance','treatment')
+    df = full_join.join(df, on = 'person_id', how = 'inner')
+
+    print(df.where(expr('time = 1')).count())
+
+    # 3. Filter out rows (days) that occur before the patient got treated (this is baseline). And then restart time to begin on the trial day. 
+    df = df.where(expr('time >= trial'))
+    df = df.withColumn('time', expr('ROW_NUMBER() OVER(PARTITION BY person_id, trial ORDER BY date)'))
+
+    print(df.where(expr('time = 1')).count())
+
+    # 4. Currently, date is time-invariant, and reflects the trial start date for the patient. Create a time-varying date column by summing date with time (minus 1)
+    df = df.withColumn('date', expr('DATE_ADD(date, time) - 1'))
+
+    print(df.where(expr('time = 1')).count())
+    
+    # 5. Get the outcome indicator and date and time value and join to the cross-join dataset. Limit to only rows up to the maximum follow-up length
+    outcome = eligible_sample_EHR_all.select(['person_id','day'] + outcome_columns)
+    # df = df.join(outcome, on = ['person_id','day'], how = 'inner').where(expr('({} IS NULL) OR (date <= {})'.format(outcome_date, outcome_date)) )
+    df = df.join(outcome, on = ['person_id','day'], how = 'inner')
+    # df = df.where(expr('time <= {}'.format(follow_up_length)))
+
+    print(df.where(expr('time = 1')).count())
+    
+    # # 6. Create time varying indicator for our selected outcome that turns 1 on the day of the event, and removes rows after it. 
+    # df = df.withColumn('outcome', expr('CASE WHEN date >= {} THEN 1 ELSE 0 END'.format(outcome_date))).withColumn('outcome', expr('SUM(outcome) OVER(PARTITION BY trial, person_id ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)')).where(expr('outcome <= 1'))
+    
+    # # 7. Create time indicators, one per day of follow-up; 
+    # for i in np.arange(1, time_end + 1):
+    #     df = df.withColumn('d{}'.format(i), lit(0))
+    #     df = df.withColumn('d{}'.format(i), expr('CASE WHEN time = {} THEN 1 ELSE d{} END'.format(i, i)))
+
+    # # 8. Filter to the final columns we need for analysis
+    # time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
+    # main_columns = ['person_id','time','trial','treatment','subclass']
+    # target_column = ['outcome']
+    # final_columns = main_columns + target_column + time_indicator_features + outcome_columns
+    
+    # # 9. Filter the data frame to the final columns we need for analysis. 
+    # df = df.select(final_columns)
+
+    # # Finally - create a row_id variable
+    # df = df.withColumn('row_id', expr('ROW_NUMBER() OVER(ORDER BY RAND())'))
+
+    # # # 10. Join the weights; Weights are time invariant; 
+    # # weights = propensity_model_all_weights.select('person_id','trial',weight_column)
+    # # df = df.join(weights, on = ['person_id','trial'], how = 'inner')
+    
+    return df
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.1a14ee76-280e-46a0-8072-d3adea949e40"),
+    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
+    propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
+)
+# Set up expanded data for DTSA (Matching) (d03cbe59-1be7-4e54-bffe-040d39ce84f7): v6
+def expanded_dataset_for_outcome_analysis_matching_deathhosp( nearest_neighbor_matching_all, propensity_model_prep_expanded):
 
     # The purpose of this node is to expand the dataset for discrete time survival analysis; and to set up the dataset for Cox regression; 
 
@@ -2557,12 +3830,12 @@ pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
 @transform_pandas(
-    Output(rid="ri.foundry.main.dataset.1a14ee76-280e-46a0-8072-d3adea949e40"),
+    Output(rid="ri.foundry.main.dataset.b1bb6db2-cbe3-440f-bfea-a03c73680556"),
     nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
     propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
 )
-# Set up expanded data for DTSA (Matching) (d03cbe59-1be7-4e54-bffe-040d39ce84f7): v1
-def expanded_dataset_for_outcome_analysis_matching_modcomposite( nearest_neighbor_matching_all, propensity_model_prep_expanded):
+# Set up expanded data for DTSA (Matching) (d03cbe59-1be7-4e54-bffe-040d39ce84f7): v6
+def expanded_dataset_for_outcome_analysis_matching_severeillness( nearest_neighbor_matching_all, propensity_model_prep_expanded):
 
     # The purpose of this node is to expand the dataset for discrete time survival analysis; and to set up the dataset for Cox regression; 
 
@@ -2570,7 +3843,7 @@ def expanded_dataset_for_outcome_analysis_matching_modcomposite( nearest_neighbo
     grace_period = 5
     time_end = 14
     follow_up_length = time_end
-    outcome = 'mod_composite'
+    outcome = 'composite'
     original_trial_column = 'day'
     outcome_columns = ['{}{}'.format(outcome, time_end), '{}_date'.format(outcome), '{}_time{}'.format(outcome, time_end)]
     outcome_date = '{}_date'.format(outcome)
@@ -2868,8 +4141,7 @@ def hospitalizations(microvisits_to_macrovisits, minimal_patient_cohort, death_d
     cohort_facts_visit_level_paxlovid=Input(rid="ri.foundry.main.dataset.63c6f325-61d9-4e4f-acc2-2e9e6c301adc"),
     long_covid_date=Input(rid="ri.foundry.main.dataset.69dade5f-c43f-457a-89da-652a3e4a6e2a"),
     long_covid_date_v2=Input(rid="ri.foundry.main.dataset.5f0de766-9252-47b9-b981-c43c93a1181d"),
-    long_dataset_all=Input(rid="ri.foundry.main.dataset.fd0ccf46-d321-41d5-a119-2e57940a931d"),
-    paxlovid_bootstrap_DTSA_death=Input(rid="ri.foundry.main.dataset.3993bec5-34a6-47d9-b910-6698d1c77119")
+    long_dataset_all=Input(rid="ri.foundry.main.dataset.fd0ccf46-d321-41d5-a119-2e57940a931d")
 )
 def long_covid_sample(long_dataset_all, cohort_facts_visit_level_paxlovid, cohort_code, long_covid_date, long_covid_date_v2, paxlovid_bootstrap_DTSA_death):
     
@@ -3057,6 +4329,202 @@ def long_covid_sample(long_dataset_all, cohort_facts_visit_level_paxlovid, cohor
     
 
 @transform_pandas(
+    Output(rid="ri.vector.main.execute.c94949dd-16e9-4280-afe7-998ed508cfe9"),
+    cohort_code=Input(rid="ri.foundry.main.dataset.b6450c6b-55d3-41e3-8208-14fa0780cd41"),
+    cohort_facts_visit_level_paxlovid=Input(rid="ri.foundry.main.dataset.63c6f325-61d9-4e4f-acc2-2e9e6c301adc"),
+    long_covid_date=Input(rid="ri.foundry.main.dataset.69dade5f-c43f-457a-89da-652a3e4a6e2a"),
+    long_covid_date_v2=Input(rid="ri.foundry.main.dataset.5f0de766-9252-47b9-b981-c43c93a1181d"),
+    long_dataset_all=Input(rid="ri.foundry.main.dataset.fd0ccf46-d321-41d5-a119-2e57940a931d")
+)
+def long_covid_sample_consort(long_dataset_all, cohort_facts_visit_level_paxlovid, cohort_code, long_covid_date, long_covid_date_v2, paxlovid_bootstrap_DTSA_death):
+    
+    cohort_facts_visit_level_paxlovid = cohort_facts_visit_level_paxlovid
+
+    cohort_facts_visit_level_covid_out = cohort_facts_visit_level_paxlovid
+    treatment_column = 'paxlovid_treatment'
+    long_dataset = long_dataset_all
+    sample = 'at_risk_severe_covid'
+    drop_patients_without_BMI = True
+    drop_patients_without_recent_EGFR= True
+    drop_patients_without_sdoh = True
+    age_risk_cutoff = 65
+    
+    # Limit to top Data Partners or 3 trials
+    limit_top_dp = True
+    limit_to_3_trials = False
+    top_data_partners = [726,569,399,376,819,102,134,526,688,655,939,507,207,770,406] 
+
+    # Calculate CCI
+    long_dataset = long_dataset.withColumn('CCI', expr('cci_index_covariate_mi_LVCF + cci_index_covariate_chf_LVCF + cci_index_covariate_pvd_LVCF + cci_index_covariate_cvd_LVCF + cci_index_covariate_dem_LVCF + cci_index_covariate_cpd_LVCF + cci_index_covariate_rd_LVCF + cci_index_covariate_pep_LVCF + cci_index_covariate_liv_LVCF + cci_index_covariate_dia_LVCF + cci_index_covariate_hem_LVCF + cci_index_covariate_ren_LVCF + cci_index_covariate_can_LVCF + cci_index_covariate_hiv_LVCF'))
+
+    long_dataset = long_dataset.withColumnRenamed('sdoh2_by_preferred_county_LVCF','SDOH')
+    
+    # long_dataset = long_dataset.withColumn('CCI', expr('cci_index_covariate_mi + cci_index_covariate_chf + cci_index_covariate_pvd + cci_index_covariate_cvd + cci_index_covariate_dem + cci_index_covariate_cpd + cci_index_covariate_rd + cci_index_covariate_pep + cci_index_covariate_liv + cci_index_covariate_dia + cci_index_covariate_hem + cci_index_covariate_ren + cci_index_covariate_can + cci_index_covariate_hiv'))
+
+    dropcols = [column for column in long_dataset.columns if 'cci_index_covariate' in column]
+    long_dataset = long_dataset.drop(*dropcols)
+
+    # Now we can identify who is eligible
+    # We have already removed patients who were treated before COVID
+    follow_up_length = 28
+    hospitalization_free_period = 10
+    include_ED = True
+    death_look_forward = 1
+    grace_period = 5
+
+    # 1. Remove patients AFTER they have already been treated. For this study, patients are only able to enter a trial in which they were treated. So remove anyone who was not treated with anything
+    df = long_dataset.where(expr('day <= {}'.format(grace_period)))
+    print('minimal sample', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    dropcols = [column for column in df.columns if 'exclusion_contraindication' in column]
+    print(dropcols)
+
+    # Remove patients without BMI
+    if drop_patients_without_BMI: # Drop Patients Missing BMI
+        df = df.where('MISSING_covariate_BMI_LVCF <> 1')
+        print('patient does NOT have missing BMI', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    else: # Keep patients with missing BMI
+        bmi_columns = [column for column in df.columns if 'covariate_BMI' in column]
+        df = df.drop(*bmi_columns)
+
+    # Patient has an EGFR measure in the prior 365 days;
+    if drop_patients_without_recent_EGFR:
+        df = df.where('EGFR_current_LVCF IS NOT NULL')
+        print('patient has EGFR measured in the past 12 mo', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # Person is 30 by trial day
+    df = df.withColumn('age', expr('DATEDIFF(date, date_of_birth) / 365.25')).where('age >= 18')
+    print('Patient is 18+', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # # Exclude patients once they get treated
+    df = df.where(expr('treated <= 1'))
+    print('patient has not received treatment previously', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    #. 2. Remove ALL rows from 1-day before the patient dies
+    df = df.where(expr('(death_date IS NULL) OR (date < DATE_ADD(death_date, -{}) ) '.format(death_look_forward)))
+    print('patient does not die within 24h of eligibility', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # 2.1 Repeat for hospitalization - remove patients who were hospitalized 10 days before the current trial date
+    # That is, keep dates that occur at least 30 days after the most recent hospitalization preCOVID
+    df = df.where(expr('(DATE_ADD(date, -{pre_covid_hosp_period}) > hospitalization_date_pre_covid) OR (hospitalization_date_pre_covid IS NULL)'.format(pre_covid_hosp_period = hospitalization_free_period))).drop('hospitalization_date_pre_covid')
+    print('patient does not get hospitalized 10 days before COVID', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    
+    # 2.2 As we did for death, remove all rows from 1-day before the patient is hospitalized. 
+    df = df.where(expr('(date < DATE_ADD(hospitalization_date_post_covid, -{}) ) OR (hospitalization_date_post_covid IS NULL)'.format(death_look_forward)))
+    print('patient does not get hospitalized within 24h of eligibility', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # 2.1 Repeat for ED visit - remove patients who had an ED visit 30 days before the current trial date
+    # That is, keep dates that occur at least 30 days after the most recent hospitalization preCOVID
+    if include_ED:
+        df = df.where(expr('(DATE_ADD(date, -{pre_covid_hosp_period}) > EDvisit_date_pre_covid) OR (EDvisit_date_pre_covid IS NULL)'.format(pre_covid_hosp_period = hospitalization_free_period))).drop('EDvisit_date_pre_covid')
+        
+        # 2.2 As we did for death, remove all rows from 1-day before the patient is ED. 
+        df = df.where(expr('(date < DATE_ADD(EDvisit_date_post_covid, -{}) ) OR (EDvisit_date_post_covid IS NULL)'.format(death_look_forward)))
+        print('patient not ED visit within 24 hours', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+        ###### NEW CODE Feb 18th
+        # 2.3 We will repeat the above for supplemental oxygen; Apply same 10 day restriction 
+        df = df.where(expr('(DATE_ADD(date, -{pre_covid_hosp_period}) > oxygen_date_pre_covid) OR (oxygen_date_pre_covid IS NULL)'.format(pre_covid_hosp_period = hospitalization_free_period))).drop('EDvisit_date_pre_covid')
+        
+        # 2.4 As we did for death, remove all rows from 1-day before the patient is ED. 
+        df = df.where(expr('(date < DATE_ADD(oxygen_date_post_covid, -{}) ) OR (oxygen_date_post_covid IS NULL)'.format(death_look_forward)))
+        print('patient does not receive supplemental oxygen within 24h', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    
+
+    #. 3. Identify if the patient has at least 30 days of data remaining at each trial. Remove all rows where the patient has < 30 days of data remaining
+    df = df.withColumn('remaining_days_of_data', expr('DATEDIFF(end_day, date) + 1')).withColumn('remaining_days_of_data', expr('CASE WHEN remaining_days_of_data > {follow_up} THEN {follow_up} ELSE remaining_days_of_data END'.format(follow_up = follow_up_length)))
+    df = df.withColumn('remaining_days_of_data_actual', expr('DATEDIFF(end_day, date) + 1'))
+    df = df.where(expr('remaining_days_of_data >= {}'.format(follow_up_length)))
+    print('patient has at least 28 days of follow up data', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # 3B. Identify patients with at least 365 days of observation
+    df = df.withColumn('observation_period', expr('DATEDIFF(date, first_visit)')).where(expr('observation_period >= 365'))
+    print('patient has at least 365 days of pre trial data', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # 5. Limit to data partners with at least 1 ELIGIBLE patient who was treated. 'treatment' is TIME INVARIANT;
+    df = df.withColumn('treatment', expr('MAX(treated) OVER(PARTITION BY person_id)'))
+    untreated_df = df.select('person_id','treatment','data_partner_id').distinct().groupBy(col('data_partner_id')).agg( (sum(col('treatment')) / countDistinct(col('person_id'))).alias('proportion_treated'),  sum(col('treatment')).alias('number_treated') ).where(expr('number_treated >= 1'))
+    df = df.join(untreated_df, on = 'data_partner_id', how = 'inner').drop('treatment','proportion_treated','number_treated')
+    print('patient from data partner with at least 1 patient treated', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # 6. Exclude patients based on eligibility criteria
+    other_covid_treatment_columns = [column for column in df.columns if ('covid19_treatment' in column) & ('LVCF' in column)]
+    contraindication_condition_columns = [column for column in df.columns if ('exclusion_contraindication_condition' in column) & ('LVCF' in column)]
+    contraindication_drug_columns = [column for column in df.columns if ('exclusion_contraindication_drug' in column) & ('LVCF' in column)]
+       
+    # Create strings of the columns in each group
+    contraindication_drug_columns_string = ','.join(contraindication_drug_columns)
+    contraindication_condition_columns_string = ','.join(contraindication_condition_columns)
+    other_covid_treatment_columns_string = ','.join(other_covid_treatment_columns)
+
+    # # APPLY EXCLUSIONS INCREMENTALLY
+    # # Indications
+    # df = df.withColumn('has_indication', expr('GREATEST({columns})'.format(columns = indication_columns_string))).where(expr('has_indication <> 1'))
+    # print('Patient has no indications (conditions) for Diabetes', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # Drug Contraindications
+    df = df.withColumn('has_contraindication_drug', expr('GREATEST({columns})'.format(columns = contraindication_drug_columns_string))).where(expr('has_contraindication_drug <> 1'))
+    print('Patient has no contraindications drugs', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # Condition Contraindications
+    df = df.withColumn('has_contraindication_condition', expr('GREATEST({columns})'.format(columns = contraindication_condition_columns_string))).where(expr('has_contraindication_condition <> 1'))
+    print('Patient has no contraindications conditions', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # Other COVID tmts
+    df = df.withColumn('has_other_covid_tmts', expr('GREATEST({columns})'.format(columns = other_covid_treatment_columns_string))).where(expr('has_other_covid_tmts <> 1'))
+    print('Patient not exposed to any other COVID tx', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    #### APPLY INCLUSIONS #######
+    df = df.withColumn('Age', expr('DATEDIFF(date, date_of_birth)/365.25'))
+    df = df.withColumn('age_risk_factor_LVCF', expr('CASE WHEN Age >= {} THEN 1 ELSE 0 END'.format(age_risk_cutoff)))
+    risk_factors_severe_covid = ["age_risk_factor_LVCF","cancer_risk_factor_LVCF","cerebrovascular_disease_risk_factor_LVCF","chronic_kidney_disease_risk_factor_LVCF","liver_disease_risk_factor_LVCF","lung_disease_risk_factor_LVCF","cystic_fibrosis_risk_factor_LVCF","dementia_risk_factor_LVCF","diabetes_mellitus_risk_factor_LVCF","disability_risk_factor_LVCF","heart_disease_risk_factor_LVCF","hemoglobin_blood_disorder_risk_factor_LVCF","hiv_risk_factor_LVCF","mental_health_disorder_risk_factor_LVCF","obesity_overweight_risk_factor_LVCF","immunocompromised_risk_factor_LVCF","immunosuppressive_therapy_risk_factor_LVCF","corticosteroid_use_risk_factor_LVCF","tuberculosis_risk_factor_LVCF","substance_abuse_risk_factor_LVCF","smoking_risk_factor_LVCF"]
+    risk_factors_severe_covid_string = ','.join(risk_factors_severe_covid)
+    df = df.withColumn('at_risk_severe_covid', expr('GREATEST({})'.format(risk_factors_severe_covid_string)))
+    
+    if sample == 'at_risk_severe_covid':
+        df = df.where(expr('at_risk_severe_covid = 1'))
+        print('Patient is at risk of Severe COVID-19', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    
+    df = df.drop('Age','age_risk_factor_LVCF')
+
+    if drop_patients_without_sdoh == True:
+        df = df.dropna(subset = ['SDOH'])
+        print('Patient has SDOH index data', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    ############################
+    # Limit to top data partners
+    if limit_top_dp:
+        df = df.where(col('data_partner_id').isin(top_data_partners))
+        print('Top Data Partner - 80% of all treated patients', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    if limit_to_3_trials:
+        df = df.where(expr('trial <= 3'))
+    ############################
+
+    ############################
+    if drop_patients_without_sdoh == False:
+        # If we keep patients without SDOH then we need to drop the SDOH columns
+        sdoh_columns = [column for column in df.columns if 'SDOH' in column]
+        df = df.drop(*sdoh_columns)
+
+    # 2.5 Exclude patients who had LONG COVID before their COVID index date
+    df = df.join(long_covid_date_v2.withColumnRenamed('date','long_covid_date').withColumnRenamed('LONG_COVID','long_covid').select('person_id','long_covid_date','long_covid','window_start'), on = 'person_id', how = 'left')
+    # If we want to use the START of the long covid prediction window as the event time, then set the below to True; 
+    use_start_of_window = True
+    if use_start_of_window:
+        df = df.withColumn('LC_event_date', expr('CASE WHEN window_start IS NOT NULL THEN window_start ELSE long_covid_date END'))
+    else:
+        df = df.withColumn('LC_event_date', expr('long_covid_date'))
+    # Now, we exclude patients who had LC before their index date
+    df = df.where(expr('( LC_event_date >= COVID_index_date ) OR ( LC_event_date IS NULL )'.format(death_look_forward)))
+    print('No Long COVID before index - Person Trial', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    print('No Long COVID before index - Person', print(df.select(count(col('person_id'))).toPandas()))
+
+  
+    return df.select('person_id','day')
+
+    
+
+@transform_pandas(
     Output(rid="ri.foundry.main.dataset.fd0ccf46-d321-41d5-a119-2e57940a931d"),
     ED_visits=Input(rid="ri.foundry.main.dataset.0ef602f8-450d-43f1-a28f-b0dc7947143a"),
     baseline_variables_stacked=Input(rid="ri.foundry.main.dataset.e910efc8-0261-40da-86f1-2f90e2d5e44b"),
@@ -3112,6 +4580,215 @@ def long_dataset_all(minimal_patient_cohort, cohort_facts_visit_level_paxlovid, 
     if complete_case:
         df = df.dropna(subset = complete_case_columns)
     print('After keeping complete cases', print(df.select(countDistinct(col('person_id'))).toPandas()))
+
+    # 5. Rename ALL the time varying covariates to have the _LVCF extension
+    for column in time_varying_covariates:
+        df = df.withColumnRenamed(column, column + '_LVCF')
+
+    # 5. From the all facts table, extract the same time-varying covariates (current values). Exclude BMI and vaccinated. Join to our cross join table.
+    time_varying_covariates_modified = [column for column in time_varying_covariates if column in all_facts.columns]
+    all_facts_sub = all_facts.select(['person_id', 'date'] + time_varying_covariates_modified).drop('vaccinated','BMI_rounded')
+    df = df.join(all_facts_sub, on = ['person_id','date'], how = 'left')
+
+    # 7. Categorize the BMI_LVCF column. We will treat this as the time-varying BMI column. 
+    ##### categorize BMI and make into dummy ######
+    df = df.withColumn('BMI_rounded_LVCF', expr('CASE WHEN BMI_rounded_LVCF = 0 THEN NULL ELSE BMI_rounded_LVCF END'))
+    df = df.withColumn('bmi_category_LVCF', expr("CASE WHEN BMI_rounded_LVCF < 25 THEN 'NORMAL' \
+    WHEN BMI_rounded_LVCF >= 25 AND BMI_rounded_LVCF < 30 THEN 'OVERWEIGHT' \
+    WHEN BMI_rounded_LVCF >= 30 AND BMI_rounded_LVCF < 40 THEN 'OBESE' \
+    WHEN BMI_rounded_LVCF >= 40 THEN 'OBESE_CLASS_3' \
+    ELSE 'MISSING' END")).drop('BMI_rounded_LVCF','BMI_rounded')
+
+    # 8. Convert to dummy; add these as columns
+    bmi_columns = []
+    gps = df.select('bmi_category_LVCF').distinct().toPandas()
+    gps = gps['bmi_category_LVCF'].tolist()
+    for bmi_cat in gps:
+        df = df.withColumn('{}_covariate_BMI_LVCF'.format(bmi_cat), expr('CASE WHEN bmi_category_LVCF = "{}" THEN 1 ELSE 0 END'.format(bmi_cat)))
+        bmi_columns.append('{}_LVCF'.format(bmi_cat))
+    df = df.drop('bmi_category_LVCF')
+    time_varying_covariates += bmi_columns
+
+    # 9. Create dummy variables for the demographics - race and gender
+    df = df.withColumn('race_ethnicity_white', when(col('race_ethnicity') == 'White Non-Hispanic', 1).otherwise(0))
+    df = df.withColumn('race_ethnicity_hispanic_latino', when(col('race_ethnicity') == 'Hispanic or Latino Any Race', 1).otherwise(0))
+    df = df.withColumn('race_ethnicity_black', when(col('race_ethnicity') == 'Black or African American Non-Hispanic', 1).otherwise(0))
+    df = df.withColumn('race_ethnicity_asian', when(col('race_ethnicity') == 'Asian Non-Hispanic', 1).otherwise(0))
+    df = df.withColumn('race_ethnicity_aian', when(col('race_ethnicity') == 'American Indian or Alaska Native Non-Hispanic', 1).otherwise(0))
+    df = df.withColumn('race_ethnicity_nhpi', when(col('race_ethnicity') == 'Native Hawaiian or Other Pacific Islander Non-Hispanic', 1).otherwise(0))
+    # df = df.withColumn('race_ethnicity_other', expr("CASE WHEN race_ethnicity IN ('Other Non-Hispanic','Unknown') THEN 1 ELSE 0 END"))
+    df = df.drop('race_ethnicity')
+
+    # 10. For all time varying covariates except LAB values, we will fill with 0's including the treatment exposures
+    columns_to_fill = [column for column in time_varying_covariates if column not in lab_values]
+    columns_to_fill = [column for column in columns_to_fill if column in df.columns]
+    for column in columns_to_fill:
+        df = df.withColumn(column, expr('NVL({}, 0)'.format(column)))
+
+    # 11. Perform two cumulative sums of the treatment exposure columns so we can identify when patients were treated for the first time. Include a column that indicate ANY treatment (treated). AT THIS POINT WE ARE NOT EXCLUDING PATIENTS ONCE TREATED; 
+    df = df.withColumn('treated', col('{}'.format(treatment_column)))
+    
+    # treatment_exposures_mod = treatment_exposures + ['treated']
+    treatment_exposures_mod = ['treated']
+    for column in treatment_exposures_mod:
+        df = df.withColumn(column, expr('SUM({treatment}) OVER(PARTITION BY person_id ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)'.format(treatment = column))).withColumn(column, expr('SUM({treatment}) OVER(PARTITION BY person_id ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)'.format(treatment = column)))
+
+    # Join in the hospitalization, death, and ED visit dates ### NEW CODE Feb 18th
+    df = df.join(death_date, on = 'person_id', how = 'left').join(hospitalizations, on = 'person_id', how = 'left').join(ED_visits, on = 'person_id', how = 'left').join(oxygen_date, on = 'person_id', how = 'left')
+
+    # Add a variable to define first visit so we can exclude patients with less than 365 days of observation prior to COVID19
+    first_visit = all_facts.select('first_visit','person_id').distinct()
+    df = df.join(first_visit, on = 'person_id', how = 'inner')
+
+    # Create a variable identifying the last day of data for each patient. Some patients die after data extraction. This is actually the LAST date of observation for these patients
+    df = df.withColumn('end_day', expr('GREATEST(data_extraction_date, death_date)'))
+    df = df.withColumn('end_day', expr('LEAST(end_day, CURRENT_DATE())'))
+
+    # Create Sex column
+    df = df.withColumn('female', expr('CASE WHEN sex = "FEMALE" THEN 1 ELSE 0 END')).drop('sex')
+
+    # # 10. Add in the lab variables - categorize these. First create variable for exclusion based on EGFRR. This is based only on the most recent value
+    # df = df.withColumn('exclusion_contraindication_condition_EGFR_LVCF', expr('CASE WHEN EGFR_LVCF > 0 AND EGFR_LVCF < 30 THEN 1 ELSE 0 END'))
+    df = df.withColumn('exclusion_contraindication_condition_EGFR_LVCF', expr('CASE WHEN EGFR_LVCF >= 0 AND EGFR_LVCF < 30 THEN 1 ELSE 0 END'))
+
+    # 11. Now categorize the lab measures and create dummy variables. The low cutoff has been changed to 90 for EGFR
+    lab_columns = ["CRP_LVCF","WBC_LVCF","LYMPH_LVCF","ALBUMIN_LVCF","ALT_LVCF","EGFR_LVCF","PLT_LVCF","CREATININE_LVCF","HEMOGLOBIN_LVCF","DIABETES_A1C_LVCF"]
+    df = df.withColumn('CRP_LVCF', expr('CASE WHEN CRP_LVCF > 10 THEN 2 WHEN CRP_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('WBC_LVCF', expr('CASE WHEN WBC_LVCF = 0 THEN NULL WHEN WBC_LVCF < 4500 THEN 2 WHEN WBC_LVCF > 11000 THEN 3 WHEN WBC_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('LYMPH_LVCF', expr('CASE WHEN LYMPH_LVCF = 0 THEN NULL WHEN LYMPH_LVCF > 4800 THEN 2 WHEN LYMPH_LVCF < 1000 THEN 3 WHEN LYMPH_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('ALBUMIN_LVCF', expr('CASE WHEN ALBUMIN_LVCF = 0 THEN NULL WHEN ALBUMIN_LVCF < 3.4 THEN 2 WHEN ALBUMIN_LVCF > 5.4 THEN 3 WHEN ALBUMIN_LVCF IS NOT NULL THEN 1 ELSE NULL END')) 
+    df = df.withColumn('ALT_LVCF', expr('CASE WHEN ALT_LVCF < 7 THEN 2 WHEN ALT_LVCF > 56 THEN 3 WHEN ALT_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('PLT_LVCF', expr('CASE WHEN PLT_LVCF = 0 THEN NULL WHEN PLT_LVCF < 150000 THEN 2 WHEN PLT_LVCF > 450000 THEN 3 WHEN PLT_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('CREATININE_LVCF', expr('CASE WHEN CREATININE_LVCF = 0 THEN NULL WHEN CREATININE_LVCF < 0.5 THEN 2 WHEN CREATININE_LVCF > 7.5 THEN 3 WHEN CREATININE_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('HEMOGLOBIN_LVCF', expr('CASE WHEN HEMOGLOBIN_LVCF = 0 THEN NULL WHEN HEMOGLOBIN_LVCF < 12 AND female = 1 THEN 2 WHEN HEMOGLOBIN_LVCF < 13 AND female = 0 THEN 2 WHEN HEMOGLOBIN_LVCF > 16 AND female = 1 THEN 3 WHEN HEMOGLOBIN_LVCF > 17 AND female = 0 THEN 3 WHEN HEMOGLOBIN_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('DIABETES_A1C_LVCF_CONTINUOUS', col('DIABETES_A1C_LVCF'))
+    df = df.withColumn('DIABETES_A1C_LVCF', expr('CASE WHEN DIABETES_A1C_LVCF = 0 THEN NULL WHEN DIABETES_A1C_LVCF < 5.7 THEN 2 WHEN DIABETES_A1C_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+    df = df.withColumn('EGFR_LVCF', expr('CASE WHEN EGFR_LVCF = 0 THEN NULL WHEN EGFR_LVCF < 90 THEN 2 WHEN EGFR_LVCF IS NOT NULL THEN 1 ELSE NULL END'))
+
+    # # Create dummy variables for the lab measures
+    # df = df.withColumn('crp_covariate_high_LVCF', expr('CASE WHEN CRP_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('crp_covariate_normal_LVCF', expr('CASE WHEN CRP_LVCF = 1 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('wbc_covariate_high_LVCF', expr('CASE WHEN WBC_LVCF = 3 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('wbc_covariate_low_LVCF', expr('CASE WHEN WBC_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('wbc_covariate_normal_LVCF', expr('CASE WHEN WBC_LVCF = 1 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('lymph_covariate_high_LVCF', expr('CASE WHEN LYMPH_LVCF = 3 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('lymph_covariate_low_LVCF', expr('CASE WHEN LYMPH_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('lymph_covariate_normal_LVCF', expr('CASE WHEN LYMPH_LVCF = 1 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('albumin_covariate_high_LVCF', expr('CASE WHEN ALBUMIN_LVCF = 3 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('albumin_covariate_low_LVCF', expr('CASE WHEN ALBUMIN_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('albumin_covariate_normal_LVCF', expr('CASE WHEN ALBUMIN_LVCF = 1 THEN 1 ELSE 0 END'))
+    df = df.withColumn('alt_covariate_high_LVCF', expr('CASE WHEN ALT_LVCF = 3 THEN 1 ELSE 0 END'))
+    df = df.withColumn('alt_covariate_low_LVCF', expr('CASE WHEN ALT_LVCF = 2 THEN 1 ELSE 0 END'))
+    df = df.withColumn('alt_covariate_normal_LVCF', expr('CASE WHEN ALT_LVCF = 1 THEN 1 ELSE 0 END'))
+    df = df.withColumn('egfr_covariate_low_LVCF', expr('CASE WHEN EGFR_LVCF = 2 THEN 1 ELSE 0 END'))
+    df = df.withColumn('egfr_covariate_normal_LVCF', expr('CASE WHEN EGFR_LVCF = 1 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('plt_covariate_high_LVCF', expr('CASE WHEN PLT_LVCF = 3 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('plt_covariate_low_LVCF', expr('CASE WHEN PLT_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('plt_covariate_normal', expr('CASE WHEN PLT_LVCF = 1 THEN 1 ELSE 0 END'))
+    df = df.withColumn('creatinine_covariate_high', expr('CASE WHEN CREATININE_LVCF = 3 THEN 1 ELSE 0 END'))
+    df = df.withColumn('creatinine_covariate_low', expr('CASE WHEN CREATININE_LVCF = 2 THEN 1 ELSE 0 END'))
+    df = df.withColumn('creatinine_covariate_normal_LVCF', expr('CASE WHEN CREATININE_LVCF = 1 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('hemoglobin_covariate_high_LVCF', expr('CASE WHEN HEMOGLOBIN_LVCF = 3 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('hemoglobin_covariate_low_LVCF', expr('CASE WHEN HEMOGLOBIN_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('hemoglobin_covariate_normal_LVCF', expr('CASE WHEN HEMOGLOBIN_LVCF = 1 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('diabetes_a1c_covariate_high_LVCF', expr('CASE WHEN DIABETES_A1C_LVCF = 2 THEN 1 ELSE 0 END'))
+    # df = df.withColumn('diabetes_a1c_covariate_normal_LVCF', expr('CASE WHEN DIABETES_A1C_LVCF = 1 THEN 1 ELSE 0 END'))
+
+    # # Finally, perform categorizations of the most recent A1c for comparison
+    # df = df.withColumn('current_A1c_categorical', expr("CASE \
+    # WHEN DIABETES_A1C_current_LVCF < 4 THEN 'Less400' \
+    # WHEN DIABETES_A1C_current_LVCF < 5.3 THEN '400to529' \
+    # WHEN DIABETES_A1C_current_LVCF < 5.6 THEN '530to559' \
+    # WHEN DIABETES_A1C_current_LVCF < 5.9 THEN '560to589' \
+    # WHEN DIABETES_A1C_current_LVCF < 6.2 THEN '590to619' \
+    # WHEN DIABETES_A1C_current_LVCF < 6.5 THEN '620to649' \
+    # WHEN DIABETES_A1C_current_LVCF >= 6.5 THEN '650plus' \
+    # ELSE 'MissingA1c' END"))
+
+    # # Finally, perform categorizations of the most recent A1c for comparison
+    # df = df.withColumn('current_A1c_categorical', expr("CASE \
+    # WHEN DIABETES_A1C_LVCF_CONTINUOUS < 5.3 THEN '400to529' \
+    # WHEN DIABETES_A1C_LVCF_CONTINUOUS < 5.6 THEN '530to559' \
+    # WHEN DIABETES_A1C_LVCF_CONTINUOUS < 5.9 THEN '560to589' \
+    # WHEN DIABETES_A1C_LVCF_CONTINUOUS < 6.2 THEN '590to619' \
+    # WHEN DIABETES_A1C_LVCF_CONTINUOUS >= 6.2 THEN '620to649' \
+    # ELSE 'MissingA1c' END")).drop('DIABETES_A1C_LVCF_CONTINUOUS')
+
+    # # Convert the above to dummies, and drop the original features
+    # gps = df.select('current_A1c_categorical').distinct().toPandas()
+    # gps = gps['current_A1c_categorical'].tolist()
+    # for i in gps:
+    #     df = df.withColumn('current_A1c_covariate_{}_LVCF'.format(i), expr('CASE WHEN current_A1c_categorical = "{}" THEN 1 ELSE 0 END'.format(i)))
+    # df = df.drop('current_A1c_categorical')
+
+    # #############################################################
+
+    return df
+
+    
+
+    
+    
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.09e12ea9-44cd-4882-9cda-3d828b2c0f4b"),
+    ED_visits=Input(rid="ri.foundry.main.dataset.0ef602f8-450d-43f1-a28f-b0dc7947143a"),
+    baseline_variables_stacked=Input(rid="ri.foundry.main.dataset.e910efc8-0261-40da-86f1-2f90e2d5e44b"),
+    cohort_facts_visit_level_paxlovid=Input(rid="ri.foundry.main.dataset.63c6f325-61d9-4e4f-acc2-2e9e6c301adc"),
+    death_date=Input(rid="ri.foundry.main.dataset.027c6b7b-88a8-4977-91a8-85e89150ef25"),
+    hospitalizations=Input(rid="ri.foundry.main.dataset.65ffc6be-73f1-431d-b720-29da7cbcc433"),
+    minimal_patient_cohort=Input(rid="ri.foundry.main.dataset.9b0b693d-1e29-4eeb-aa02-a86f1c7c7fb6"),
+    oxygen_date=Input(rid="ri.foundry.main.dataset.91a6e009-64ca-466c-b3ba-34b2a086b9f8"),
+    person_date_cross_join=Input(rid="ri.foundry.main.dataset.20a8907e-c506-4116-a04c-ad96436639f8")
+)
+def long_dataset_all_consort(minimal_patient_cohort, cohort_facts_visit_level_paxlovid, hospitalizations, person_date_cross_join, ED_visits, death_date, baseline_variables_stacked, oxygen_date):
+    person_date_cross_join = person_date_cross_join
+    minimal_patient_cohort = minimal_patient_cohort
+    cohort_facts_visit_level_covid_out = cohort_facts_visit_level_paxlovid
+
+    # # Treatment list #################################################################################
+    treatment_column = 'paxlovid_treatment'
+    treatment_exposures = [treatment_column]
+    grace_period_length = 5-1
+    treatments = ','.join(treatment_exposures)
+    complete_case = False # Baseline Variables Missing
+    complete_case_columns = ['BMI_rounded','EGFR','CREATININE','ALT','sdoh2_by_preferred_county']
+    ######################################################################################################
+
+    # Set up all facts table
+    all_facts = cohort_facts_visit_level_covid_out
+
+    # Begin with the cross join dataset; We only need days 1-5 (from COVID index). Also include the 6th day
+    df = person_date_cross_join.withColumnRenamed('time','day').where(expr('day <= {} + 1'.format(grace_period_length)))
+    print('Minimal Patient Sample - age/sex/bmi', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    print('PERSON TRIALS - Minimal Patient Sample - age/sex/bmi', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 1. From the minimal patient cohort table, obtain the time invariant demographic variables. 
+    details = minimal_patient_cohort.drop(*["PAXLOVID","METFORMIN","FLUVOXAMINE","IVERMECTIN","MONTELUKAST","ALBUTEROL","AZITHROMYCIN","FLUTICASONE","exposed"]).withColumnRenamed('COVID_first_poslab_or_diagnosis_date','COVID_index_date')    
+
+    # 2. Limit the minimal patient cohort details table to only patients who were never treated PRIOR the grace period. 
+    never_treated = baseline_variables_stacked.selectExpr('person_id', '{} AS previously_treated'.format(treatment_column)).where(expr('previously_treated = 0')).select('person_id').distinct()
+    details = details.join(never_treated, on = 'person_id', how = 'inner')
+
+    # Merge the details (1 row per patient) to the cross join table as a one-to-many join
+    df = df.join(details, on = 'person_id', how = 'inner')
+    print('Patients never Treated with study drug prior to a trial occurring during the grace period', print(df.select(countDistinct(col('person_id'))).toPandas()))
+    print('PERSON TRIALS never Treated with study drug prior to a trial occurring during the grace period', print(df.select(count(col('person_id'))).toPandas()))
+
+    # 3. Next join the baseline variables for all 7 trials to our cross join table. First identify the covariates in the baseline table
+    time_varying_covariates = [column for column in baseline_variables_stacked.columns if column not in ['person_id','date','number_of_visits','observation_period']]
+    time_varying_covariates = [column for column in time_varying_covariates if column in baseline_variables_stacked.columns]
+    print(time_varying_covariates)
+    lab_values = ["CRP","WBC","LYMPH","ALBUMIN","ALT","EGFR","DIABETES_A1C","HEMOGLOBIN","CREATININE","PLT"]
+    
+    # 4. Join the baseline_variables to our cross join table (with demographics)
+    df = df.join(baseline_variables_stacked.select(['person_id','date'] + time_varying_covariates), on = ['person_id', 'date'], how = 'inner')
+
+    # 4.1 Optional to drop patients for complete case analysis
+    if complete_case:
+        df = df.dropna(subset = complete_case_columns)
+        print('After keeping complete cases', print(df.select(countDistinct(col('person_id'))).toPandas()))
+        print('PERSON TRIALS After keeping complete cases', print(df.select(count(col('person_id'))).toPandas()))
 
     # 5. Rename ALL the time varying covariates to have the _LVCF extension
     for column in time_varying_covariates:
@@ -3459,98 +5136,14 @@ def measurements_filtered(measurement, concept_set_members, cohort_code, drugs_f
     return df
 
 @transform_pandas(
-    Output(rid="ri.foundry.main.dataset.b5e5c84a-33bd-46d9-8620-5d95eca65f9c"),
-    paxlovid_marginal_survival_curve_LC=Input(rid="ri.foundry.main.dataset.a0cf0300-89fe-4b0b-8ce5-2a3701f600d3"),
-    paxlovid_marginal_survival_curve_composite=Input(rid="ri.foundry.main.dataset.15d987cb-52c0-4fae-a754-b2cc581c4a05"),
-    paxlovid_marginal_survival_curve_compositedeathhosp=Input(rid="ri.foundry.main.dataset.c491c8ca-8112-422e-b361-d46b411e524d"),
-    paxlovid_marginal_survival_curve_death=Input(rid="ri.foundry.main.dataset.5510c5c0-44e4-4f2a-a943-17e7769544d6"),
-    paxlovid_marginal_survival_curve_modcomposite=Input(rid="ri.foundry.main.dataset.eea6696b-8640-4f79-86e9-d53c9aa772a7")
-)
-def merge_results(paxlovid_marginal_survival_curve_composite, paxlovid_marginal_survival_curve_modcomposite, paxlovid_marginal_survival_curve_compositedeathhosp, paxlovid_marginal_survival_curve_death, paxlovid_marginal_survival_curve_LC):
-
-    # ("Relative_Risk","Relative_Risk_Lower_Limit","Relative_Risk_Upper_Limit","Risk_Reduction","Risk_Reduction_Lower_Limit","Risk_Reduction_Upper_Limit","drug")
-    df1A = paxlovid_marginal_survival_curve_composite.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
-    df1A['Outcome'] = 'Composite - ED visit, hospitalization, supplemental oxygen, or death'
-    df1A['Statistic'] = 'Relative Risk'
-    df1A = df1A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
-    df1A['rank'] = 1
-
-    df1B = paxlovid_marginal_survival_curve_composite.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
-    df1B['Outcome'] = 'Composite - ED visit, hospitalization, supplemental oxygen, or death'
-    df1B['Statistic'] = 'Risk Reduction'
-    df1B = df1B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
-    df1B['rank'] = 5
-
-    df1 = pd.concat([df1A, df1B])
-
-    df2A = paxlovid_marginal_survival_curve_modcomposite.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
-    df2A['Outcome'] = 'Composite - ED visit, hospitalization, or death'
-    df2A['Statistic'] = 'Relative Risk'
-    df2A = df2A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
-    df2A['rank'] = 2
-
-    df2B = paxlovid_marginal_survival_curve_modcomposite.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
-    df2B['Outcome'] = 'Composite - ED visit, hospitalization, or death'
-    df2B['Statistic'] = 'Risk Reduction'
-    df2B = df2B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
-    df2B['rank'] = 6
-
-    df2 = pd.concat([df2A, df2B])
-
-    df3A = paxlovid_marginal_survival_curve_compositedeathhosp.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
-    df3A['Outcome'] = 'Composite - hospitalization or death'
-    df3A['Statistic'] = 'Relative Risk'
-    df3A = df3A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
-    df3A['rank'] = 3
-
-    df3B = paxlovid_marginal_survival_curve_compositedeathhosp.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
-    df3B['Outcome'] = 'Composite - hospitalization or death'
-    df3B['Statistic'] = 'Risk Reduction'
-    df3B = df3B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
-    df3B['rank'] = 7
-    df3 = pd.concat([df3A, df3B])
-
-    df4A = paxlovid_marginal_survival_curve_death.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
-    df4A['Outcome'] = 'Death'
-    df4A['Statistic'] = 'Relative Risk'
-    df4A = df4A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
-    df4A['rank'] = 4
-
-    df4B = paxlovid_marginal_survival_curve_death.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
-    df4B['Outcome'] = 'Death'
-    df4B['Statistic'] = 'Risk Reduction'
-    df4B = df4B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
-    df4B['rank'] = 8
-    df4 = pd.concat([df4A, df4B])
-
-    df5A = paxlovid_marginal_survival_curve_LC.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
-    df5A['Outcome'] = 'Long COVID'
-    df5A['Statistic'] = 'Relative Risk'
-    df5A = df5A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
-    df5A['rank'] = 5
-
-    df5B = paxlovid_marginal_survival_curve_LC.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
-    df5B['Outcome'] = 'Long COVID'
-    df5B['Statistic'] = 'Risk Reduction'
-    df5B = df5B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
-    df5B['rank'] = 10
-    df5 = pd.concat([df5A, df5B])
-
-    final = pd.concat([df1,df2,df3,df4,df5])
-
-    return final
-     
-    
-
-@transform_pandas(
     Output(rid="ri.foundry.main.dataset.3ce973a0-3ec4-41f6-acc5-7b71551d38c4"),
-    Paxlovid_Long_COVID_DTSA=Input(rid="ri.foundry.main.dataset.ca282b12-df63-4d80-a1d6-245d446596a0"),
+    coxreg_matching_competing_risk_hospitalization=Input(rid="ri.foundry.main.dataset.22a70e8c-0514-407d-9bdd-ae09ac1ab182"),
+    coxreg_matching_competing_risk_longcovid=Input(rid="ri.foundry.main.dataset.f04db14f-e568-486a-913d-6e0a8d36623b"),
     coxreg_matching_composite=Input(rid="ri.foundry.main.dataset.02d290e4-679c-4bc4-8950-2c8582620696"),
-    coxreg_matching_composite_death_hosp=Input(rid="ri.foundry.main.dataset.f09ea15f-655a-4eb2-828c-9a3520200d66"),
     coxreg_matching_death=Input(rid="ri.foundry.main.dataset.7a61c0b5-0bfa-4455-8e47-28de0483238b"),
-    coxreg_matching_modcomposite=Input(rid="ri.foundry.main.dataset.51246f0a-8d87-4c6e-b97f-9bdbccc389df")
+    coxreg_matching_deathhosp=Input(rid="ri.foundry.main.dataset.51246f0a-8d87-4c6e-b97f-9bdbccc389df")
 )
-def merge_results_HRs(coxreg_matching_composite, coxreg_matching_modcomposite, coxreg_matching_composite_death_hosp, coxreg_matching_death, Paxlovid_Long_COVID_DTSA):
+def merge_results_HRs(coxreg_matching_composite, coxreg_matching_deathhosp, coxreg_matching_death, coxreg_matching_competing_risk_hospitalization, coxreg_matching_competing_risk_longcovid):
 
     # ("coef","HR","SE","Robust_SE","z","P","variable","adjusted_LL","adjusted_UL","adjusted_adjusted_LL","adjusted_adjusted_UL")
     df1 = coxreg_matching_composite.loc[:, ['HR','adjusted_LL','adjusted_UL']]
@@ -3559,14 +5152,14 @@ def merge_results_HRs(coxreg_matching_composite, coxreg_matching_modcomposite, c
     df1 = df1.rename(columns = {'adjusted_LL':'Lower_Limit', 'adjusted_UL':'Upper_Limit','HR':'Estimate'})
     df1['rank'] = 1
 
-    df2 = coxreg_matching_modcomposite.loc[:, ['HR','adjusted_LL','adjusted_UL']]
-    df2['Outcome'] = 'Composite - ED visit, hospitalization, or death'
+    df2 = coxreg_matching_deathhosp.loc[:, ['HR','adjusted_LL','adjusted_UL']]
+    df2['Outcome'] = 'Composite - hospitalization or death'
     df2['Statistic'] = 'Hazard Ratio'
     df2 = df2.rename(columns = {'adjusted_LL':'Lower_Limit', 'adjusted_UL':'Upper_Limit','HR':'Estimate'})
     df2['rank'] = 2
 
-    df3 = coxreg_matching_composite_death_hosp.loc[:, ['HR','adjusted_LL','adjusted_UL']]
-    df3['Outcome'] = 'Composite - hospitalization or death'
+    df3 = coxreg_matching_competing_risk_hospitalization.loc[:, ['HR','adjusted_LL','adjusted_UL']]
+    df3['Outcome'] = 'Hospitalization'
     df3['Statistic'] = 'Hazard Ratio'
     df3 = df3.rename(columns = {'adjusted_LL':'Lower_Limit', 'adjusted_UL':'Upper_Limit','HR':'Estimate'})
     df3['rank'] = 3
@@ -3577,13 +5170,98 @@ def merge_results_HRs(coxreg_matching_composite, coxreg_matching_modcomposite, c
     df4 = df4.rename(columns = {'adjusted_LL':'Lower_Limit', 'adjusted_UL':'Upper_Limit','HR':'Estimate'})
     df4['rank'] = 4
 
-    # ("Estimate","SE","t","P","variable","RR","LL","UL","adjusted_LL","adjusted_UL")
+    ("Estimate","SE","t","P","variable","RR","LL","UL","adjusted_LL","adjusted_UL")
 
-    df5 = Paxlovid_Long_COVID_DTSA.loc[:, ['RR','adjusted_LL','adjusted_UL']]
+    df5 = coxreg_matching_competing_risk_longcovid.loc[:, ['HR','adjusted_LL','adjusted_UL']]
     df5['Outcome'] = 'Long COVID'
     df5['Statistic'] = 'Hazard Ratio'
-    df5 = df5.rename(columns = {'adjusted_LL':'Lower_Limit', 'adjusted_UL':'Upper_Limit','RR':'Estimate'})
+    df5 = df5.rename(columns = {'adjusted_LL':'Lower_Limit', 'adjusted_UL':'Upper_Limit','HR':'Estimate'})
     df5['rank'] = 5
+
+    final = pd.concat([df1,df2,df3,df4,df5])
+
+    return final
+     
+    
+
+@transform_pandas(
+    Output(rid="ri.foundry.main.dataset.b5e5c84a-33bd-46d9-8620-5d95eca65f9c"),
+    CIF_Death=Input(rid="ri.foundry.main.dataset.81c00668-6457-460b-bcef-f10336b24ae2"),
+    CIF_DeathorHosp=Input(rid="ri.foundry.main.dataset.61ca4735-9c8e-420e-bd4f-219351d0a6cf"),
+    CIF_Hospitalization=Input(rid="ri.foundry.main.dataset.5c3d51c5-1717-4b12-8805-29441980fc42"),
+    CIF_LongCOVID=Input(rid="ri.foundry.main.dataset.25c1a3be-a08a-4022-8a05-1fe2e1f53640"),
+    CIF_SevereIllness=Input(rid="ri.foundry.main.dataset.6710a083-83ff-4d82-9c86-149534405923"),
+    merge_results_HRs=Input(rid="ri.foundry.main.dataset.3ce973a0-3ec4-41f6-acc5-7b71551d38c4")
+)
+def merge_results_rrs(CIF_SevereIllness, CIF_DeathorHosp, CIF_Hospitalization, CIF_Death, CIF_LongCOVID, merge_results_HRs):
+
+    # ("Relative_Risk","Relative_Risk_Lower_Limit","Relative_Risk_Upper_Limit","Risk_Reduction","Risk_Reduction_Lower_Limit","Risk_Reduction_Upper_Limit","drug")
+    df1A = CIF_SevereIllness.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
+    df1A['Outcome'] = 'Composite - ED visit, hospitalization, supplemental oxygen, or death'
+    df1A['Statistic'] = 'Relative Risk'
+    df1A = df1A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
+    df1A['rank'] = 1
+
+    df1B = CIF_SevereIllness.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
+    df1B['Outcome'] = 'Composite - ED visit, hospitalization, supplemental oxygen, or death'
+    df1B['Statistic'] = 'Risk Reduction'
+    df1B = df1B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
+    df1B['rank'] = 6
+
+    df1 = pd.concat([df1A, df1B])
+
+    df2A = CIF_DeathorHosp.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
+    df2A['Outcome'] = 'Composite - hospitalization or death'
+    df2A['Statistic'] = 'Relative Risk'
+    df2A = df2A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
+    df2A['rank'] = 2
+
+    df2B = CIF_DeathorHosp.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
+    df2B['Outcome'] = 'Composite - hospitalization or death'
+    df2B['Statistic'] = 'Risk Reduction'
+    df2B = df2B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
+    df2B['rank'] = 7
+
+    df2 = pd.concat([df2A, df2B])
+
+    df3A = CIF_Hospitalization.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
+    df3A['Outcome'] = 'Hospitalization'
+    df3A['Statistic'] = 'Relative Risk'
+    df3A = df3A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
+    df3A['rank'] = 3
+
+    df3B = CIF_Hospitalization.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
+    df3B['Outcome'] = 'Hospitalization'
+    df3B['Statistic'] = 'Risk Reduction'
+    df3B = df3B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
+    df3B['rank'] = 8
+    df3 = pd.concat([df3A, df3B])
+
+    df4A = CIF_Death.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
+    df4A['Outcome'] = 'Death'
+    df4A['Statistic'] = 'Relative Risk'
+    df4A = df4A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
+    df4A['rank'] = 4
+
+    df4B = CIF_Death.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
+    df4B['Outcome'] = 'Death'
+    df4B['Statistic'] = 'Risk Reduction'
+    df4B = df4B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
+    df4B['rank'] = 9
+    df4 = pd.concat([df4A, df4B])
+
+    df5A = CIF_LongCOVID.loc[:, ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit']]
+    df5A['Outcome'] = 'Long COVID'
+    df5A['Statistic'] = 'Relative Risk'
+    df5A = df5A.rename(columns = {'Relative_Risk_Lower_Limit':'Lower_Limit', 'Relative_Risk_Upper_Limit':'Upper_Limit','Relative_Risk':'Estimate'})
+    df5A['rank'] = 5
+
+    df5B = CIF_LongCOVID.loc[:, ['Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']]
+    df5B['Outcome'] = 'Long COVID'
+    df5B['Statistic'] = 'Risk Reduction'
+    df5B = df5B.rename(columns = {'Risk_Reduction_Lower_Limit':'Lower_Limit', 'Risk_Reduction_Upper_Limit':'Upper_Limit','Risk_Reduction':'Estimate'})
+    df5B['rank'] = 10
+    df5 = pd.concat([df5A, df5B])
 
     final = pd.concat([df1,df2,df3,df4,df5])
 
@@ -3678,6 +5356,173 @@ def observations_filtered(observation, concept_set_members, cohort_code, customi
 from pyspark.sql import functions as F
 
 @transform_pandas(
+    Output(rid="ri.foundry.main.dataset.488d48d7-f515-4371-8dc5-dee99b34a13b"),
+    nearest_neighbor_matching_LC=Input(rid="ri.foundry.main.dataset.6d3eb3b5-af0e-4831-9d10-c593c7158038"),
+    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
+    paxlovid_expanded_data_long_covid=Input(rid="ri.foundry.main.dataset.3d2b0e13-8f89-43c2-b72a-f1e6cad12d67"),
+    propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
+)
+# DeathCounts (25df088d-8be2-4fa7-b257-cad784ca33a1): v1
+def outcome_counts(nearest_neighbor_matching_all, propensity_model_prep_expanded, paxlovid_expanded_data_long_covid, nearest_neighbor_matching_LC):
+    
+    df = nearest_neighbor_matching_all.select('person_id','treatment','trial')
+    
+    outcome_columns = ["composite14","hospitalization14","composite_death_hosp14","death14"]
+    outcomes = propensity_model_prep_expanded.select(['person_id','trial','treatment'] + outcome_columns)
+    
+    aggregations = [max(col(column)).alias(column) for column in outcome_columns]
+    outcomes = outcomes.groupBy(['person_id','treatment','trial']).agg(*aggregations)
+    df = df.join(outcomes, on = ['person_id','treatment','trial'], how = 'inner')
+
+    # 1. Get # of Events
+    aggregations = [sum(col(column)).alias(column) for column in outcome_columns]
+    dfevent = df.groupBy('treatment').agg(*aggregations)
+
+    # Next convert to pandas and then stack
+    dfevent = dfevent.toPandas()
+    dfevent = dfevent.set_index('treatment')
+    new_columns = list(dfevent.columns)
+    multi_index = pd.MultiIndex.from_product([['N'], new_columns])
+    dfevent.columns = multi_index
+
+    # Now stack
+    dfevent = dfevent.stack(level = 1).unstack(level = 0)
+    dfevent.columns = ['Non_Initators','Initiators']
+    dfevent = dfevent.reset_index().rename(columns = {'index':'Outcome'})
+    old = outcome_columns
+    new = ["Composite - ED visit, hospitalization, supplemental oxygen, or death","Hospitalization","Composite - Hospitalization, or death","Death"]
+    dfevent['Outcome'] = dfevent['Outcome'].replace(dict(zip(old,new)))
+    dfevent.columns = [column + '_event_count' for column in dfevent.columns]
+
+    ###### REPEAT FOR N AT RISK
+    # Get At risk and # of Events
+    aggregations = [count(col(column)).alias(column) for column in outcome_columns]
+    dfcount = df.groupBy('treatment').agg(*aggregations)
+
+    # Next convert to pandas and then stack
+    dfcount = dfcount.toPandas()
+    dfcount = dfcount.set_index('treatment')
+    new_columns = list(dfcount.columns)
+    multi_index = pd.MultiIndex.from_product([['N'], new_columns])
+    dfcount.columns = multi_index
+
+    # Now stack
+    dfcount = dfcount.stack(level = 1).unstack(level = 0)
+    dfcount.columns = ['Non_Initators','Initiators']
+    dfcount = dfcount.reset_index().rename(columns = {'index':'Outcome'})
+    old = outcome_columns
+    new = ["Composite - ED visit, hospitalization, supplemental oxygen, or death","Hospitalization","Composite - Hospitalization, or death","Death"]
+    dfcount['Outcome'] = dfcount['Outcome'].replace(dict(zip(old,new)))
+    dfcount.columns = [column + '_at_risk' for column in dfcount.columns]
+
+    # MERGE 
+    df_all = pd.concat([dfcount, dfevent], axis=1)
+
+    ########################################### LONG COVID SECTION ############################################
+
+    df = nearest_neighbor_matching_LC.select('person_id','treatment','trial')
+
+    outcomes = paxlovid_expanded_data_long_covid.select('person_id','trial','treatment','outcome').withColumnRenamed('outcome','long_covid')
+    outcome_columns = ['long_covid']
+    aggregations = [max(col(column)).alias(column) for column in outcome_columns]
+    outcomes = outcomes.groupBy(['person_id','treatment','trial']).agg(*aggregations)
+    df = df.join(outcomes, on = ['person_id','treatment','trial'], how = 'inner')
+
+    #####################################################
+    # Get At risk and # of Events
+    aggregations = [sum(col(column)).alias(column) for column in outcome_columns]
+    dfevent = df.groupBy('treatment').agg(*aggregations)
+
+    # Next convert to pandas and then stack
+    dfevent = dfevent.toPandas()
+    dfevent = dfevent.set_index('treatment')
+    new_columns = list(dfevent.columns)
+    multi_index = pd.MultiIndex.from_product([['N'], new_columns])
+    dfevent.columns = multi_index
+
+    # Now stack
+    dfevent = dfevent.stack(level = 1).unstack(level = 0)
+    dfevent.columns = ['Non_Initators','Initiators']
+    dfevent = dfevent.reset_index().rename(columns = {'index':'Outcome'})
+    old = ['long_covid']
+    new = ['Long COVID']
+    dfevent['Outcome'] = dfevent['Outcome'].replace(dict(zip(old,new)))
+    dfevent.columns = [column + '_event_count' for column in dfevent.columns]
+
+    ###################################################################
+
+    # # Get At risk and # of Events
+    # aggregations = [count(col(column)).alias(column) for column in outcome_columns]
+    # dfcount = df.groupBy('treatment').agg(*aggregations)
+    dfcount = df.groupBy('treatment').agg(count(col('person_id')).alias('long_covid'))
+
+    # Next convert to pandas and then stack
+    dfcount = dfcount.toPandas()
+    dfcount = dfcount.set_index('treatment')
+    new_columns = list(dfcount.columns)
+    multi_index = pd.MultiIndex.from_product([['N'], new_columns])
+    dfcount.columns = multi_index
+
+    # Now stack
+    dfcount = dfcount.stack(level = 1).unstack(level = 0)
+    dfcount.columns = ['Non_Initators','Initiators']
+    dfcount = dfcount.reset_index().rename(columns = {'index':'Outcome'})
+    old = ['long_covid']
+    new = ['Long COVID']
+    dfcount['Outcome'] = dfcount['Outcome'].replace(dict(zip(old,new)))
+    dfcount.columns = [column + '_at_risk' for column in dfcount.columns]
+
+    # MERGE 
+    df_lc = pd.concat([dfcount, dfevent], axis=1)
+    final = pd.concat([df_all,df_lc])
+    final['Analysis'] = 1
+    
+    return final
+    
+
+#################################################
+## Global imports and functions included below ##
+#################################################
+
+######## GLOBAL CODE
+# We can add this code to the GLOBAL CODE on the RHS pane
+# Import the data types we will be using to functions and schemas
+from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
+from pyspark.sql import Row
+
+# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
+from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
+from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
+
+# Additional Functions
+from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
+
+# Functions for window functions
+from pyspark.sql import Window
+from pyspark.sql.functions import row_number
+
+### PYTHON Functions
+import datetime as dt
+
+## GLOBAL PY CODE
+### Import all necessary packages
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+
+# Pandas functions
+idx = pd.IndexSlice
+
+# Viewing related functions
+import warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
+
+@transform_pandas(
     Output(rid="ri.foundry.main.dataset.91a6e009-64ca-466c-b3ba-34b2a086b9f8"),
     ED_visits=Input(rid="ri.foundry.main.dataset.0ef602f8-450d-43f1-a28f-b0dc7947143a"),
     cohort_facts_visit_level_paxlovid=Input(rid="ri.foundry.main.dataset.63c6f325-61d9-4e4f-acc2-2e9e6c301adc")
@@ -3697,1046 +5542,6 @@ def oxygen_date(cohort_facts_visit_level_paxlovid, ED_visits):
     
 
 @transform_pandas(
-    Output(rid="ri.foundry.main.dataset.b8ad3326-707a-4073-9e8f-0c8317bdfb2e"),
-    expanded_dataset_for_outcome_analysis_matching=Input(rid="ri.foundry.main.dataset.32ef28d9-6ad8-4b41-8a63-c6e4e37036d9"),
-    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
-    prediction_dataset_bootstrapping_composite=Input(rid="ri.foundry.main.dataset.3c4d041c-a2d8-46b6-8382-8ccae890879b")
-)
-# Perform DTSA on each bootstrap (bb0b638d-c3c4-4655-b34d-d157d5aaa152): v1
-def paxlovid_bootstrap_DTSA_composite(expanded_dataset_for_outcome_analysis_matching, prediction_dataset_bootstrapping_composite, nearest_neighbor_matching_all):
-    prediction_dataset_bootstrapping_paxlovid = prediction_dataset_bootstrapping_composite
-
-    import datetime
-    import random
-    from functools import reduce
-    from pyspark.sql import DataFrame
-
-    # This node will perform discrete time survival analysis to estimate the marginal survival curves for each treatment group; which are then used to estimate the relative risk of the outcome (hospitalization) on day 28
-
-    # Steps:
-    # 1. Take bootstrap
-    # 2. Fit the propensity model and estimate the weights
-    # 3. With the bootstrap - fit the DTSM
-    # 4. Create prediction datasets 
-    #   a. Prediction dataset for treated patients - use fully expanded dataset with ALL patients with treatment = 1
-    #   b. Prediction dataset for control patients - use fully expanded dataset with ALL patients with treatment = 0
-    # 5. Get predicted hazards in each dataset - under treated and under control
-    # 6. Stack the datasets
-    # 7. Average the hazards by day within each treatment condition = we will end up with 28 rows per treatment group
-    # 8. Take the hazard complement (1 - H) and then calculate the survival curve as the cumulative product (make sure rows are sorted)
-    # 9. We will end up with 28 rows per treatment group; with a "survival curve" column
-
-    ################# NOW WE WILL FIT THE DTSA ###########################
-    # Predictors are: treatment, day indicators, and the predictors
-    df = expanded_dataset_for_outcome_analysis_matching
-    # df = df.where(expr('trial <= 3'))
-
-    time_end = 14
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    treatment = 'treatment'
-    outcome = 'outcome'
-    id_column = 'person_id'
-    time_column = 'time'
-    matched_pair_column = 'subclass'
-    
-    # # Set up the outcome model features; and create our dataset for logistic regression (features + outcome)
-    # predictors = ['treatment'] + time_indicator_features + features
-    predictors = [treatment] + time_indicator_features
-    # predictors_no_treatment = time_indicator_features + features
-    predictors_no_treatment = time_indicator_features
-    predictors_plus_outcome = predictors + [outcome]
-    data_subset = df.select([matched_pair_column] + predictors_plus_outcome)
-
-    ############# INCLUDE INTERACTIONS BETWEEN TREATMENT AND TIME INDICATORS ######
-    # When we include this product - we do NOT include treatment as a predictor in the model ##### This will give us Tmt * Time, and Tmt * Predictors
-    time_dependent_features = []
-    for pred in predictors_no_treatment:
-        data_subset = data_subset.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        time_dependent_features.append('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred))
-
-    # # Calculate interactions between each time indicator AND each predictor. This will give us Time * Predictors
-    # time_dependent_interactions = []
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         data_subset = data_subset.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    #         time_dependent_interactions.append('{}_x_{}'.format(time_indicator, feature))
-
-    # Add the interactions between tmt * time indicators to the predictors object
-    predictors = time_indicator_features + time_dependent_features
-    print('final features:', predictors)
-
-    ###### SET UP THE SAME FOR THE PREDICTION DATASET ###########
-    # Set up the prediction df - this only contains the predictors. Calculate the interactions between tmt * time as above. 
-    prediction_df = prediction_dataset_bootstrapping_paxlovid
-    for pred in predictors_no_treatment:
-        prediction_df = prediction_df.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         prediction_df = prediction_df.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    
-    ####### SPARK ML LOGISTIC REGRESSION MODEL #######################
-    from pyspark.sql import SparkSession
-    from pyspark import SparkFiles
-    from pyspark.ml.classification import LogisticRegression
-    from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-    from pyspark.ml.feature import VectorAssembler
-
-    ############ PERFORM BOOTSTRAPPING ##########################
-    # Identify the unique subclasses - we will bootstrap the subclasses
-    unique_subclasses = df.select('subclass').distinct()
-    n_unique_subclasses = unique_subclasses.count()
-
-    # Create empty list to store bootstrap output
-
-    Output_Prediction_DataFrames = []
-    
-    # Now, perform the bootstrapping
-    for i in np.arange(0, 300):
-
-        # First - get a sample of the subclasses with replacement
-        random.seed(a = i)
-        sampled_subclasses_df = unique_subclasses.sample(fraction=1.0, seed=i, withReplacement=True)
-
-        # Use the subclass dataframe to filter the original dataframe (randomly select matched pairs)
-        data_subset_sample = sampled_subclasses_df.join(data_subset, on = 'subclass', how = 'inner')
-
-        # Set up the vector assembler. The "predictors" object is a list containing the treatment, time indicators, and treatment * time indicators
-        assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-        data_subset_sample = assembler.transform(data_subset_sample)
-        prediction_subset = assembler.transform(prediction_df) # Transform the prediction_df also; 
-
-        # Set up the LogisticRegression
-        logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-        labelCol = outcome, 
-        family = 'binomial', 
-        maxIter = 1000, 
-        regParam = 0.0, 
-        elasticNetParam = 1.0,
-        fitIntercept=False,
-        # weightCol = 'SW'
-        )
-
-        # Fit the DTSA model to the data
-        model = logistic_regression.fit(data_subset_sample)
-
-        # # Print out the coefficients
-        # coefficients = model.coefficients
-        # intercept = model.intercept
-        # print("Coefficients: ", coefficients)
-        # print("Intercept: {:.3f}".format(intercept))
-
-        # Get the predictions; Function below extracts the probability of the outcome (= 1)
-        def ith_(v, i):
-            try:
-                return float(v[i])
-            except ValueError:
-                return None
-
-        ith = udf(ith_, DoubleType())
-
-        # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-        denominator_predictions = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-        denominator_predictions = denominator_predictions.withColumn('bootstrap', lit('{}'.format(i)))
-
-        # A. Now get the survival function 
-        denominator_predictions = denominator_predictions.withColumn('survival', expr('1 - hazard'))
-        
-        # Calculate the cumulative product of the hazard complements (the conditional survival probability) within each treatment. This is already grouped by treatment and time. 
-        window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-
-        # Add the bootstrap column 
-        denominator_predictions = denominator_predictions.withColumn('survival', product(col('survival')).over(window))
-
-        # Append the prediction Spark dataframe to our list
-        Output_Prediction_DataFrames.append(denominator_predictions)
-
-        print('bootstrap {} completed'.format(i))
-
-    ################ FIT THE MODEL IN THE FULL DATAT TO GET THE POINT ESTIMATE ##############################################
-
-    #### SET UP ELEMENTS FOR SPARK LR
-    assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-
-    # Transform the input dataset (optional) and the prediction dataset
-    data_subset_sample = assembler.transform(data_subset)
-    prediction_subset = assembler.transform(prediction_df)  
-
-    # Set up the LogisticRegression; we are not using weights
-    logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-    labelCol = outcome, 
-    family = 'binomial', 
-    maxIter = 1000, 
-    regParam = 0.0, 
-    elasticNetParam = 1.0,
-    fitIntercept=False,
-    # weightCol = weight_column,
-    )
-
-    # Fit the model to the data
-    model = logistic_regression.fit(data_subset_sample)
-
-    # # Print out the coefficients
-    # coefficients = model.coefficients
-    # intercept = model.intercept
-    # print("Coefficients: ", coefficients)
-    # print("Intercept: {:.3f}".format(intercept))
-
-    # Get the predictions; Function below extracts the probability of the outcome (= 1)
-    def ith_(v, i):
-        try:
-            return float(v[i])
-        except ValueError:
-            return None
-
-    ith = udf(ith_, DoubleType())
-
-    # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-    prediction_output_df = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-    prediction_output_df = prediction_output_df.withColumn('bootstrap', lit(999))
-
-    # Get the survival function for each patient BEFORE averaging that
-    prediction_output_df = prediction_output_df.withColumn('survival', expr('1 - hazard'))
-    
-    # Calculate cumulative product of conditional survival probability (within each treatment)
-    window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-    prediction_output_df = prediction_output_df.withColumn('survival', product(col('survival')).over(window))
-
-    # Append the point estimate dataframe to our list
-    Output_Prediction_DataFrames.append(prediction_output_df)
-    
-
-    ##################### FINALLY CONCATENATE ALL THE PREDICTIONS OUTPUTS INTO A SINGLE DATA FRAME ####################
-    denominator_predictions_stacked = reduce(DataFrame.unionAll, Output_Prediction_DataFrames)
-
-    return denominator_predictions_stacked
-    
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.a81d7b76-0066-4fc5-a522-5fdaf39b5128"),
-    expanded_dataset_for_outcome_analysis_matching_compositedeathhosp=Input(rid="ri.foundry.main.dataset.1b4818d5-123b-4f59-a7b8-a341d2330a85"),
-    paxlovid_bootstrap_DTSA_modcomposite=Input(rid="ri.foundry.main.dataset.79d27717-1ad0-4c1a-9590-cc4beda25648"),
-    prediction_dataset_bootstrapping_compositedeathhosp=Input(rid="ri.foundry.main.dataset.fe128665-5d79-4cbb-9fad-a776395fa0a6")
-)
-# Perform DTSA on each bootstrap (bb0b638d-c3c4-4655-b34d-d157d5aaa152): v1
-def paxlovid_bootstrap_DTSA_compositedeathhosp(expanded_dataset_for_outcome_analysis_matching_compositedeathhosp, prediction_dataset_bootstrapping_compositedeathhosp, paxlovid_bootstrap_DTSA_modcomposite):
-    prediction_dataset_bootstrapping_paxlovid = prediction_dataset_bootstrapping_compositedeathhosp
-
-    import datetime
-    import random
-    from functools import reduce
-    from pyspark.sql import DataFrame
-
-    # This node will perform discrete time survival analysis to estimate the marginal survival curves for each treatment group; which are then used to estimate the relative risk of the outcome (hospitalization) on day 28
-
-    # Steps:
-    # 1. Take bootstrap
-    # 2. Fit the propensity model and estimate the weights
-    # 3. With the bootstrap - fit the DTSM
-    # 4. Create prediction datasets 
-    #   a. Prediction dataset for treated patients - use fully expanded dataset with ALL patients with treatment = 1
-    #   b. Prediction dataset for control patients - use fully expanded dataset with ALL patients with treatment = 0
-    # 5. Get predicted hazards in each dataset - under treated and under control
-    # 6. Stack the datasets
-    # 7. Average the hazards by day within each treatment condition = we will end up with 28 rows per treatment group
-    # 8. Take the hazard complement (1 - H) and then calculate the survival curve as the cumulative product (make sure rows are sorted)
-    # 9. We will end up with 28 rows per treatment group; with a "survival curve" column
-
-    ################# NOW WE WILL FIT THE DTSA ###########################
-    # Predictors are: treatment, day indicators, and the predictors
-    df = expanded_dataset_for_outcome_analysis_matching_compositedeathhosp
-    # df = df.where(expr('trial <= 3'))
-
-    time_end = 14
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    treatment = 'treatment'
-    outcome = 'outcome'
-    id_column = 'person_id'
-    time_column = 'time'
-    matched_pair_column = 'subclass'
-    
-    # # Set up the outcome model features; and create our dataset for logistic regression (features + outcome)
-    # predictors = ['treatment'] + time_indicator_features + features
-    predictors = [treatment] + time_indicator_features
-    # predictors_no_treatment = time_indicator_features + features
-    predictors_no_treatment = time_indicator_features
-    predictors_plus_outcome = predictors + [outcome]
-    data_subset = df.select([matched_pair_column] + predictors_plus_outcome)
-
-    ############# INCLUDE INTERACTIONS BETWEEN TREATMENT AND TIME INDICATORS ######
-    # When we include this product - we do NOT include treatment as a predictor in the model ##### This will give us Tmt * Time, and Tmt * Predictors
-    time_dependent_features = []
-    for pred in predictors_no_treatment:
-        data_subset = data_subset.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        time_dependent_features.append('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred))
-
-    # # Calculate interactions between each time indicator AND each predictor. This will give us Time * Predictors
-    # time_dependent_interactions = []
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         data_subset = data_subset.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    #         time_dependent_interactions.append('{}_x_{}'.format(time_indicator, feature))
-
-    # Add the interactions between tmt * time indicators to the predictors object
-    predictors = time_indicator_features + time_dependent_features
-    print('final features:', predictors)
-
-    ###### SET UP THE SAME FOR THE PREDICTION DATASET ###########
-    # Set up the prediction df - this only contains the predictors. Calculate the interactions between tmt * time as above. 
-    prediction_df = prediction_dataset_bootstrapping_paxlovid
-    for pred in predictors_no_treatment:
-        prediction_df = prediction_df.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         prediction_df = prediction_df.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    
-    ####### SPARK ML LOGISTIC REGRESSION MODEL #######################
-    from pyspark.sql import SparkSession
-    from pyspark import SparkFiles
-    from pyspark.ml.classification import LogisticRegression
-    from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-    from pyspark.ml.feature import VectorAssembler
-
-    ############ PERFORM BOOTSTRAPPING ##########################
-    # Identify the unique subclasses - we will bootstrap the subclasses
-    unique_subclasses = df.select('subclass').distinct()
-    n_unique_subclasses = unique_subclasses.count()
-
-    # Create empty list to store bootstrap output
-
-    Output_Prediction_DataFrames = []
-    
-    # Now, perform the bootstrapping
-    for i in np.arange(0, 300):
-
-        # First - get a sample of the subclasses with replacement
-        random.seed(a = i)
-        sampled_subclasses_df = unique_subclasses.sample(fraction=1.0, seed=i, withReplacement=True)
-
-        # Use the subclass dataframe to filter the original dataframe (randomly select matched pairs)
-        data_subset_sample = sampled_subclasses_df.join(data_subset, on = 'subclass', how = 'inner')
-
-        # Set up the vector assembler. The "predictors" object is a list containing the treatment, time indicators, and treatment * time indicators
-        assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-        data_subset_sample = assembler.transform(data_subset_sample)
-        prediction_subset = assembler.transform(prediction_df) # Transform the prediction_df also; 
-
-        # Set up the LogisticRegression
-        logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-        labelCol = outcome, 
-        family = 'binomial', 
-        maxIter = 1000, 
-        regParam = 0.0, 
-        elasticNetParam = 1.0,
-        fitIntercept=False,
-        # weightCol = 'SW'
-        )
-
-        # Fit the DTSA model to the data
-        model = logistic_regression.fit(data_subset_sample)
-
-        # # Print out the coefficients
-        # coefficients = model.coefficients
-        # intercept = model.intercept
-        # print("Coefficients: ", coefficients)
-        # print("Intercept: {:.3f}".format(intercept))
-
-        # Get the predictions; Function below extracts the probability of the outcome (= 1)
-        def ith_(v, i):
-            try:
-                return float(v[i])
-            except ValueError:
-                return None
-
-        ith = udf(ith_, DoubleType())
-
-        # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-        denominator_predictions = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-        denominator_predictions = denominator_predictions.withColumn('bootstrap', lit('{}'.format(i)))
-
-        # A. Now get the survival function 
-        denominator_predictions = denominator_predictions.withColumn('survival', expr('1 - hazard'))
-        
-        # Calculate the cumulative product of the hazard complements (the conditional survival probability) within each treatment. This is already grouped by treatment and time. 
-        window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-
-        # Add the bootstrap column 
-        denominator_predictions = denominator_predictions.withColumn('survival', product(col('survival')).over(window))
-
-        # Append the prediction Spark dataframe to our list
-        Output_Prediction_DataFrames.append(denominator_predictions)
-
-        print('bootstrap {} completed'.format(i))
-
-    ################ FIT THE MODEL IN THE FULL DATAT TO GET THE POINT ESTIMATE ##############################################
-
-    #### SET UP ELEMENTS FOR SPARK LR
-    assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-
-    # Transform the input dataset (optional) and the prediction dataset
-    data_subset_sample = assembler.transform(data_subset)
-    prediction_subset = assembler.transform(prediction_df)  
-
-    # Set up the LogisticRegression; we are not using weights
-    logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-    labelCol = outcome, 
-    family = 'binomial', 
-    maxIter = 1000, 
-    regParam = 0.0, 
-    elasticNetParam = 1.0,
-    fitIntercept=False,
-    # weightCol = weight_column,
-    )
-
-    # Fit the model to the data
-    model = logistic_regression.fit(data_subset_sample)
-
-    # # Print out the coefficients
-    # coefficients = model.coefficients
-    # intercept = model.intercept
-    # print("Coefficients: ", coefficients)
-    # print("Intercept: {:.3f}".format(intercept))
-
-    # Get the predictions; Function below extracts the probability of the outcome (= 1)
-    def ith_(v, i):
-        try:
-            return float(v[i])
-        except ValueError:
-            return None
-
-    ith = udf(ith_, DoubleType())
-
-    # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-    prediction_output_df = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-    prediction_output_df = prediction_output_df.withColumn('bootstrap', lit(999))
-
-    # Get the survival function for each patient BEFORE averaging that
-    prediction_output_df = prediction_output_df.withColumn('survival', expr('1 - hazard'))
-    
-    # Calculate cumulative product of conditional survival probability (within each treatment)
-    window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-    prediction_output_df = prediction_output_df.withColumn('survival', product(col('survival')).over(window))
-
-    # Append the point estimate dataframe to our list
-    Output_Prediction_DataFrames.append(prediction_output_df)
-    
-
-    ##################### FINALLY CONCATENATE ALL THE PREDICTIONS OUTPUTS INTO A SINGLE DATA FRAME ####################
-    denominator_predictions_stacked = reduce(DataFrame.unionAll, Output_Prediction_DataFrames)
-
-    return denominator_predictions_stacked
-    
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.3993bec5-34a6-47d9-b910-6698d1c77119"),
-    expanded_dataset_for_outcome_analysis_matching_deathoutcome=Input(rid="ri.foundry.main.dataset.7fcd678b-62da-48b1-90e6-1c7e11ec5065"),
-    paxlovid_bootstrap_DTSA_compositedeathhosp=Input(rid="ri.foundry.main.dataset.a81d7b76-0066-4fc5-a522-5fdaf39b5128"),
-    prediction_dataset_bootstrapping_death=Input(rid="ri.foundry.main.dataset.243ad79a-ef32-4cde-9400-9c8ae7b35c81")
-)
-# Perform DTSA on each bootstrap (bb0b638d-c3c4-4655-b34d-d157d5aaa152): v1
-def paxlovid_bootstrap_DTSA_death(expanded_dataset_for_outcome_analysis_matching_deathoutcome, prediction_dataset_bootstrapping_death, paxlovid_bootstrap_DTSA_compositedeathhosp):
-    prediction_dataset_bootstrapping_paxlovid = prediction_dataset_bootstrapping_death
-
-    import datetime
-    import random
-    from functools import reduce
-    from pyspark.sql import DataFrame
-
-    # This node will perform discrete time survival analysis to estimate the marginal survival curves for each treatment group; which are then used to estimate the relative risk of the outcome (hospitalization) on day 28
-
-    # Steps:
-    # 1. Take bootstrap
-    # 2. Fit the propensity model and estimate the weights
-    # 3. With the bootstrap - fit the DTSM
-    # 4. Create prediction datasets 
-    #   a. Prediction dataset for treated patients - use fully expanded dataset with ALL patients with treatment = 1
-    #   b. Prediction dataset for control patients - use fully expanded dataset with ALL patients with treatment = 0
-    # 5. Get predicted hazards in each dataset - under treated and under control
-    # 6. Stack the datasets
-    # 7. Average the hazards by day within each treatment condition = we will end up with 28 rows per treatment group
-    # 8. Take the hazard complement (1 - H) and then calculate the survival curve as the cumulative product (make sure rows are sorted)
-    # 9. We will end up with 28 rows per treatment group; with a "survival curve" column
-
-    ################# NOW WE WILL FIT THE DTSA ###########################
-    # Predictors are: treatment, day indicators, and the predictors
-    df = expanded_dataset_for_outcome_analysis_matching_deathoutcome
-    # df = df.where(expr('trial <= 3'))
-
-    time_end = 14
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    treatment = 'treatment'
-    outcome = 'outcome'
-    id_column = 'person_id'
-    time_column = 'time'
-    matched_pair_column = 'subclass'
-    
-    # # Set up the outcome model features; and create our dataset for logistic regression (features + outcome)
-    # predictors = ['treatment'] + time_indicator_features + features
-    predictors = [treatment] + time_indicator_features
-    # predictors_no_treatment = time_indicator_features + features
-    predictors_no_treatment = time_indicator_features
-    predictors_plus_outcome = predictors + [outcome]
-    data_subset = df.select([matched_pair_column] + predictors_plus_outcome)
-
-    ############# INCLUDE INTERACTIONS BETWEEN TREATMENT AND TIME INDICATORS ######
-    # When we include this product - we do NOT include treatment as a predictor in the model ##### This will give us Tmt * Time, and Tmt * Predictors
-    time_dependent_features = []
-    for pred in predictors_no_treatment:
-        data_subset = data_subset.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        time_dependent_features.append('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred))
-
-    # # Calculate interactions between each time indicator AND each predictor. This will give us Time * Predictors
-    # time_dependent_interactions = []
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         data_subset = data_subset.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    #         time_dependent_interactions.append('{}_x_{}'.format(time_indicator, feature))
-
-    # Add the interactions between tmt * time indicators to the predictors object
-    predictors = time_indicator_features + time_dependent_features
-    print('final features:', predictors)
-
-    ###### SET UP THE SAME FOR THE PREDICTION DATASET ###########
-    # Set up the prediction df - this only contains the predictors. Calculate the interactions between tmt * time as above. 
-    prediction_df = prediction_dataset_bootstrapping_paxlovid
-    for pred in predictors_no_treatment:
-        prediction_df = prediction_df.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         prediction_df = prediction_df.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    
-    ####### SPARK ML LOGISTIC REGRESSION MODEL #######################
-    from pyspark.sql import SparkSession
-    from pyspark import SparkFiles
-    from pyspark.ml.classification import LogisticRegression
-    from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-    from pyspark.ml.feature import VectorAssembler
-
-    ############ PERFORM BOOTSTRAPPING ##########################
-    # Identify the unique subclasses - we will bootstrap the subclasses
-    unique_subclasses = df.select('subclass').distinct()
-    n_unique_subclasses = unique_subclasses.count()
-
-    # Create empty list to store bootstrap output
-
-    Output_Prediction_DataFrames = []
-    
-    # Now, perform the bootstrapping
-    for i in np.arange(0, 300):
-
-        # First - get a sample of the subclasses with replacement
-        random.seed(a = i)
-        sampled_subclasses_df = unique_subclasses.sample(fraction=1.0, seed=i, withReplacement=True)
-
-        # Use the subclass dataframe to filter the original dataframe (randomly select matched pairs)
-        data_subset_sample = sampled_subclasses_df.join(data_subset, on = 'subclass', how = 'inner')
-
-        # Set up the vector assembler. The "predictors" object is a list containing the treatment, time indicators, and treatment * time indicators
-        assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-        data_subset_sample = assembler.transform(data_subset_sample)
-        prediction_subset = assembler.transform(prediction_df) # Transform the prediction_df also; 
-
-        # Set up the LogisticRegression
-        logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-        labelCol = outcome, 
-        family = 'binomial', 
-        maxIter = 1000, 
-        regParam = 0.0, 
-        elasticNetParam = 1.0,
-        fitIntercept=False,
-        # weightCol = 'SW'
-        )
-
-        # Fit the DTSA model to the data
-        model = logistic_regression.fit(data_subset_sample)
-
-        # # Print out the coefficients
-        # coefficients = model.coefficients
-        # intercept = model.intercept
-        # print("Coefficients: ", coefficients)
-        # print("Intercept: {:.3f}".format(intercept))
-
-        # Get the predictions; Function below extracts the probability of the outcome (= 1)
-        def ith_(v, i):
-            try:
-                return float(v[i])
-            except ValueError:
-                return None
-
-        ith = udf(ith_, DoubleType())
-
-        # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-        denominator_predictions = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-        denominator_predictions = denominator_predictions.withColumn('bootstrap', lit('{}'.format(i)))
-
-        # A. Now get the survival function 
-        denominator_predictions = denominator_predictions.withColumn('survival', expr('1 - hazard'))
-        
-        # Calculate the cumulative product of the hazard complements (the conditional survival probability) within each treatment. This is already grouped by treatment and time. 
-        window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-
-        # Add the bootstrap column 
-        denominator_predictions = denominator_predictions.withColumn('survival', product(col('survival')).over(window))
-
-        # Append the prediction Spark dataframe to our list
-        Output_Prediction_DataFrames.append(denominator_predictions)
-
-        print('bootstrap {} completed'.format(i))
-
-    ################ FIT THE MODEL IN THE FULL DATAT TO GET THE POINT ESTIMATE ##############################################
-
-    #### SET UP ELEMENTS FOR SPARK LR
-    assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-
-    # Transform the input dataset (optional) and the prediction dataset
-    data_subset_sample = assembler.transform(data_subset)
-    prediction_subset = assembler.transform(prediction_df)  
-
-    # Set up the LogisticRegression; we are not using weights
-    logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-    labelCol = outcome, 
-    family = 'binomial', 
-    maxIter = 1000, 
-    regParam = 0.0, 
-    elasticNetParam = 1.0,
-    fitIntercept=False,
-    # weightCol = weight_column,
-    )
-
-    # Fit the model to the data
-    model = logistic_regression.fit(data_subset_sample)
-
-    # # Print out the coefficients
-    # coefficients = model.coefficients
-    # intercept = model.intercept
-    # print("Coefficients: ", coefficients)
-    # print("Intercept: {:.3f}".format(intercept))
-
-    # Get the predictions; Function below extracts the probability of the outcome (= 1)
-    def ith_(v, i):
-        try:
-            return float(v[i])
-        except ValueError:
-            return None
-
-    ith = udf(ith_, DoubleType())
-
-    # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-    prediction_output_df = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-    prediction_output_df = prediction_output_df.withColumn('bootstrap', lit(999))
-
-    # Get the survival function for each patient BEFORE averaging that
-    prediction_output_df = prediction_output_df.withColumn('survival', expr('1 - hazard'))
-    
-    # Calculate cumulative product of conditional survival probability (within each treatment)
-    window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-    prediction_output_df = prediction_output_df.withColumn('survival', product(col('survival')).over(window))
-
-    # Append the point estimate dataframe to our list
-    Output_Prediction_DataFrames.append(prediction_output_df)
-    
-
-    ##################### FINALLY CONCATENATE ALL THE PREDICTIONS OUTPUTS INTO A SINGLE DATA FRAME ####################
-    denominator_predictions_stacked = reduce(DataFrame.unionAll, Output_Prediction_DataFrames)
-
-    return denominator_predictions_stacked
-    
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.79d27717-1ad0-4c1a-9590-cc4beda25648"),
-    expanded_dataset_for_outcome_analysis_matching_modcomposite=Input(rid="ri.foundry.main.dataset.1a14ee76-280e-46a0-8072-d3adea949e40"),
-    paxlovid_bootstrap_DTSA_composite=Input(rid="ri.foundry.main.dataset.b8ad3326-707a-4073-9e8f-0c8317bdfb2e"),
-    prediction_dataset_bootstrapping_modcomposite=Input(rid="ri.foundry.main.dataset.b9c72c59-ef49-4bfc-b5d1-f00ddc4a4be1")
-)
-# Perform DTSA on each bootstrap (bb0b638d-c3c4-4655-b34d-d157d5aaa152): v1
-def paxlovid_bootstrap_DTSA_modcomposite(expanded_dataset_for_outcome_analysis_matching_modcomposite, prediction_dataset_bootstrapping_modcomposite, paxlovid_bootstrap_DTSA_composite):
-    prediction_dataset_bootstrapping_paxlovid = prediction_dataset_bootstrapping_modcomposite
-
-    import datetime
-    import random
-    from functools import reduce
-    from pyspark.sql import DataFrame
-
-    # This node will perform discrete time survival analysis to estimate the marginal survival curves for each treatment group; which are then used to estimate the relative risk of the outcome (hospitalization) on day 28
-
-    # Steps:
-    # 1. Take bootstrap
-    # 2. Fit the propensity model and estimate the weights
-    # 3. With the bootstrap - fit the DTSM
-    # 4. Create prediction datasets 
-    #   a. Prediction dataset for treated patients - use fully expanded dataset with ALL patients with treatment = 1
-    #   b. Prediction dataset for control patients - use fully expanded dataset with ALL patients with treatment = 0
-    # 5. Get predicted hazards in each dataset - under treated and under control
-    # 6. Stack the datasets
-    # 7. Average the hazards by day within each treatment condition = we will end up with 28 rows per treatment group
-    # 8. Take the hazard complement (1 - H) and then calculate the survival curve as the cumulative product (make sure rows are sorted)
-    # 9. We will end up with 28 rows per treatment group; with a "survival curve" column
-
-    ################# NOW WE WILL FIT THE DTSA ###########################
-    # Predictors are: treatment, day indicators, and the predictors
-    df = expanded_dataset_for_outcome_analysis_matching_modcomposite
-    # df = df.where(expr('trial <= 3'))
-
-    time_end = 14
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    treatment = 'treatment'
-    outcome = 'outcome'
-    id_column = 'person_id'
-    time_column = 'time'
-    matched_pair_column = 'subclass'
-    
-    # # Set up the outcome model features; and create our dataset for logistic regression (features + outcome)
-    # predictors = ['treatment'] + time_indicator_features + features
-    predictors = [treatment] + time_indicator_features
-    # predictors_no_treatment = time_indicator_features + features
-    predictors_no_treatment = time_indicator_features
-    predictors_plus_outcome = predictors + [outcome]
-    data_subset = df.select([matched_pair_column] + predictors_plus_outcome)
-
-    ############# INCLUDE INTERACTIONS BETWEEN TREATMENT AND TIME INDICATORS ######
-    # When we include this product - we do NOT include treatment as a predictor in the model ##### This will give us Tmt * Time, and Tmt * Predictors
-    time_dependent_features = []
-    for pred in predictors_no_treatment:
-        data_subset = data_subset.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        time_dependent_features.append('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred))
-
-    # # Calculate interactions between each time indicator AND each predictor. This will give us Time * Predictors
-    # time_dependent_interactions = []
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         data_subset = data_subset.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    #         time_dependent_interactions.append('{}_x_{}'.format(time_indicator, feature))
-
-    # Add the interactions between tmt * time indicators to the predictors object
-    predictors = time_indicator_features + time_dependent_features
-    print('final features:', predictors)
-
-    ###### SET UP THE SAME FOR THE PREDICTION DATASET ###########
-    # Set up the prediction df - this only contains the predictors. Calculate the interactions between tmt * time as above. 
-    prediction_df = prediction_dataset_bootstrapping_paxlovid
-    for pred in predictors_no_treatment:
-        prediction_df = prediction_df.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         prediction_df = prediction_df.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    
-    ####### SPARK ML LOGISTIC REGRESSION MODEL #######################
-    from pyspark.sql import SparkSession
-    from pyspark import SparkFiles
-    from pyspark.ml.classification import LogisticRegression
-    from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-    from pyspark.ml.feature import VectorAssembler
-
-    ############ PERFORM BOOTSTRAPPING ##########################
-    # Identify the unique subclasses - we will bootstrap the subclasses
-    unique_subclasses = df.select('subclass').distinct()
-    n_unique_subclasses = unique_subclasses.count()
-
-    # Create empty list to store bootstrap output
-
-    Output_Prediction_DataFrames = []
-    
-    # Now, perform the bootstrapping
-    for i in np.arange(0, 300):
-
-        # First - get a sample of the subclasses with replacement
-        random.seed(a = i)
-        sampled_subclasses_df = unique_subclasses.sample(fraction=1.0, seed=i, withReplacement=True)
-
-        # Use the subclass dataframe to filter the original dataframe (randomly select matched pairs)
-        data_subset_sample = sampled_subclasses_df.join(data_subset, on = 'subclass', how = 'inner')
-
-        # Set up the vector assembler. The "predictors" object is a list containing the treatment, time indicators, and treatment * time indicators
-        assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-        data_subset_sample = assembler.transform(data_subset_sample)
-        prediction_subset = assembler.transform(prediction_df) # Transform the prediction_df also; 
-
-        # Set up the LogisticRegression
-        logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-        labelCol = outcome, 
-        family = 'binomial', 
-        maxIter = 1000, 
-        regParam = 0.0, 
-        elasticNetParam = 1.0,
-        fitIntercept=False,
-        # weightCol = 'SW'
-        )
-
-        # Fit the DTSA model to the data
-        model = logistic_regression.fit(data_subset_sample)
-
-        # # Print out the coefficients
-        # coefficients = model.coefficients
-        # intercept = model.intercept
-        # print("Coefficients: ", coefficients)
-        # print("Intercept: {:.3f}".format(intercept))
-
-        # Get the predictions; Function below extracts the probability of the outcome (= 1)
-        def ith_(v, i):
-            try:
-                return float(v[i])
-            except ValueError:
-                return None
-
-        ith = udf(ith_, DoubleType())
-
-        # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-        denominator_predictions = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-        denominator_predictions = denominator_predictions.withColumn('bootstrap', lit('{}'.format(i)))
-
-        # A. Now get the survival function 
-        denominator_predictions = denominator_predictions.withColumn('survival', expr('1 - hazard'))
-        
-        # Calculate the cumulative product of the hazard complements (the conditional survival probability) within each treatment. This is already grouped by treatment and time. 
-        window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-
-        # Add the bootstrap column 
-        denominator_predictions = denominator_predictions.withColumn('survival', product(col('survival')).over(window))
-
-        # Append the prediction Spark dataframe to our list
-        Output_Prediction_DataFrames.append(denominator_predictions)
-
-        print('bootstrap {} completed'.format(i))
-
-    ################ FIT THE MODEL IN THE FULL DATAT TO GET THE POINT ESTIMATE ##############################################
-
-    #### SET UP ELEMENTS FOR SPARK LR
-    assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-
-    # Transform the input dataset (optional) and the prediction dataset
-    data_subset_sample = assembler.transform(data_subset)
-    prediction_subset = assembler.transform(prediction_df)  
-
-    # Set up the LogisticRegression; we are not using weights
-    logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-    labelCol = outcome, 
-    family = 'binomial', 
-    maxIter = 1000, 
-    regParam = 0.0, 
-    elasticNetParam = 1.0,
-    fitIntercept=False,
-    # weightCol = weight_column,
-    )
-
-    # Fit the model to the data
-    model = logistic_regression.fit(data_subset_sample)
-
-    # # Print out the coefficients
-    # coefficients = model.coefficients
-    # intercept = model.intercept
-    # print("Coefficients: ", coefficients)
-    # print("Intercept: {:.3f}".format(intercept))
-
-    # Get the predictions; Function below extracts the probability of the outcome (= 1)
-    def ith_(v, i):
-        try:
-            return float(v[i])
-        except ValueError:
-            return None
-
-    ith = udf(ith_, DoubleType())
-
-    # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-    prediction_output_df = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-    prediction_output_df = prediction_output_df.withColumn('bootstrap', lit(999))
-
-    # Get the survival function for each patient BEFORE averaging that
-    prediction_output_df = prediction_output_df.withColumn('survival', expr('1 - hazard'))
-    
-    # Calculate cumulative product of conditional survival probability (within each treatment)
-    window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-    prediction_output_df = prediction_output_df.withColumn('survival', product(col('survival')).over(window))
-
-    # Append the point estimate dataframe to our list
-    Output_Prediction_DataFrames.append(prediction_output_df)
-    
-
-    ##################### FINALLY CONCATENATE ALL THE PREDICTIONS OUTPUTS INTO A SINGLE DATA FRAME ####################
-    denominator_predictions_stacked = reduce(DataFrame.unionAll, Output_Prediction_DataFrames)
-
-    return denominator_predictions_stacked
-    
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
     Output(rid="ri.foundry.main.dataset.3d2b0e13-8f89-43c2-b72a-f1e6cad12d67"),
     long_covid_date=Input(rid="ri.foundry.main.dataset.69dade5f-c43f-457a-89da-652a3e4a6e2a"),
     long_covid_date_v2=Input(rid="ri.foundry.main.dataset.5f0de766-9252-47b9-b981-c43c93a1181d"),
@@ -4752,7 +5557,7 @@ def paxlovid_expanded_data_long_covid( long_covid_date, long_covid_date_v2, near
 
     # 1. Create a cross join between person id and days up to day 180; We add 70 to time end because - the final prediction window which occurs on month 6, ends 100 days after the start of the period.
     grace_period = 5
-    months_max = 7
+    months_max = 10
     time_end = 180 + 70
     follow_up_length = time_end
     outcome = 'long_covid'
@@ -4768,7 +5573,7 @@ def paxlovid_expanded_data_long_covid( long_covid_date, long_covid_date_v2, near
     full_join = person_df.join(days_df)
     
     # Join the cross join to matching output. In the matching output, each line is a person-trial. Each person-trial now gets joined to 180 days. 
-    matching_output = nearest_neighbor_matching_LC.select('person_id','day','subclass','distance',treatment_column)
+    matching_output = nearest_neighbor_matching_LC.select('person_id','day','subclass','distance', treatment_column)
     df = matching_output.join(full_join, on = 'person_id', how = 'inner').withColumnRenamed('day','trial')
 
     # Get the trial start dates (date)
@@ -4805,7 +5610,7 @@ def paxlovid_expanded_data_long_covid( long_covid_date, long_covid_date_v2, near
 
     # Aggregate by month. 
     df = df.withColumn('date_month', expr("DATE_TRUNC('MONTH', date)"))
-    df = df.groupBy(['person_id','date_month']).agg( min(col('time')).alias('time'), min(col('trial')).alias('trial'), max(col(treatment_column)).alias(treatment_column), max(col('long_covid_date')).alias('long_covid_date'), max(col('long_covid')).alias('long_covid'), max(col('outcome')).alias('outcome'), max(col('long_covid_time')).alias('long_covid_time'), max(col('COVID_index_date')).alias('COVID_index_date'), max(col('subclass')).alias('subclass'))
+    df = df.groupBy(['person_id','trial','date_month']).agg( min(col('time')).alias('time'), max(col(treatment_column)).alias(treatment_column), max(col('long_covid_date')).alias('long_covid_date'), max(col('long_covid')).alias('long_covid'), max(col('outcome')).alias('outcome'), max(col('long_covid_time')).alias('long_covid_time'), max(col('COVID_index_date')).alias('COVID_index_date'), max(col('subclass')).alias('subclass'))
     
     # Create accumulating month column
     df = df.withColumn('month', expr('ROW_NUMBER() OVER(PARTITION BY person_id ORDER BY date_month)'))
@@ -4831,22 +5636,25 @@ def paxlovid_expanded_data_long_covid( long_covid_date, long_covid_date_v2, near
     df = df.where(expr('time <= {}'.format(months_max))).select(final_columns)
 
     # To simplify the output dataframe, drop other columns
-    df = df.drop("long_covid","long_covid_date","long_covid_time","trial")
+    df = df.drop("long_covid","long_covid_date","long_covid_time")
 
     return df
     
 
 @transform_pandas(
-    Output(rid="ri.foundry.main.dataset.c1562765-12f3-4715-baa4-c02852eabc73"),
-    long_covid_date=Input(rid="ri.foundry.main.dataset.69dade5f-c43f-457a-89da-652a3e4a6e2a"),
+    Output(rid="ri.foundry.main.dataset.1befb2f1-8bd9-4a7c-ab66-d8ebb9c61396"),
+    CIF_Death=Input(rid="ri.foundry.main.dataset.81c00668-6457-460b-bcef-f10336b24ae2"),
     long_covid_date_v2=Input(rid="ri.foundry.main.dataset.5f0de766-9252-47b9-b981-c43c93a1181d"),
     nearest_neighbor_matching_LC=Input(rid="ri.foundry.main.dataset.6d3eb3b5-af0e-4831-9d10-c593c7158038"),
     paxlovid_expanded_data_long_covid=Input(rid="ri.foundry.main.dataset.3d2b0e13-8f89-43c2-b72a-f1e6cad12d67"),
     propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
 )
-def paxlovid_long_covid_coxreg_prep( long_covid_date, long_covid_date_v2, nearest_neighbor_matching_LC, propensity_model_prep_expanded, paxlovid_expanded_data_long_covid):
+def paxlovid_long_covid_coxreg_prep( long_covid_date_v2, nearest_neighbor_matching_LC, propensity_model_prep_expanded, paxlovid_expanded_data_long_covid, CIF_Death):
 
-    # The purpose of this node is to expand the dataset for discrete time survival analysis; and to set up the dataset for Cox regression; 
+    # The purpose of this node is to expand the dataset for discrete time survival analysis; and to set up the dataset for Cox regression;
+
+    # Do we want to use the start of LC window as LC?
+    use_start_of_window = True
 
     # import long covid table, change date to long_covid_date
     long_covid_df = long_covid_date_v2.withColumnRenamed('date','long_covid_date').withColumnRenamed('LONG_COVID','long_covid').select('person_id','long_covid_date','long_covid','window_start')
@@ -4854,7 +5662,7 @@ def paxlovid_long_covid_coxreg_prep( long_covid_date, long_covid_date_v2, neares
     # 1. Create a cross join between person id and days up to day 180; We add 70 to time end because - the final prediction window which occurs on month 6, ends 100 days after the start of the period.
     grace_period = 5
     treatment_column = 'treatment'
-    time_end = 180 + 70
+    time_end = 180
     follow_up_length = time_end
     outcome = 'long_covid'
     outcome_date = '{}_date'.format(outcome)
@@ -4889,7 +5697,7 @@ def paxlovid_long_covid_coxreg_prep( long_covid_date, long_covid_date_v2, neares
     # df = df.withColumn('long_covid_time', expr('CASE WHEN long_covid_time < 28 THEN 28 ELSE long_covid_time END'))
 
     # For patients who get long COVID, remove rows AFTER they got long COVID. For dates coming from the prediction model, we are currently using the END of the window as the long COVID date. However, if we want to use the START of the window, then set the condition below to TRUE. 
-    use_start_of_window = True
+    
     if use_start_of_window:
         df = df.withColumn('event_date', expr('CASE WHEN window_start IS NOT NULL THEN window_start ELSE long_covid_date END'))
     else:
@@ -4929,1734 +5737,26 @@ def paxlovid_long_covid_coxreg_prep( long_covid_date, long_covid_date_v2, neares
     final_columns = main_columns + target_column + time_indicator_features + outcome_columns
     
     # # 9. Filter the data frame to the final columns we need for analysis. 
-    df = df.select(['person_id', 'subclass', treatment_column, 'long_covid_time','row_id'] + target_column).withColumn('outcome', expr('MAX(outcome) OVER(PARTITION BY person_id)')).where(expr('time = 1'))
-
-    return df
-    
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.a0cf0300-89fe-4b0b-8ce5-2a3701f600d3"),
-    paxlovid_marginal_survival_curve_LC_bootstrap=Input(rid="ri.foundry.main.dataset.266f79f1-7315-4b3b-853a-58479ba33f03")
-)
-def paxlovid_marginal_survival_curve_LC(paxlovid_marginal_survival_curve_LC_bootstrap):
-
-    treatment = 'treatment'
-    time_end = 7
-
-    # This node performs the bootstrapping survival curves and estimates the relative risk of the outcome on day 30
-
-    df = paxlovid_marginal_survival_curve_LC_bootstrap.withColumn('treatment', expr('CASE WHEN {} = 0 THEN "control" ELSE "treatment" END'.format(treatment))).withColumnRenamed("time","timeline").select("timeline","treatment","bootstrap","survival")
-    df = df.toPandas()
-    df['bootstrap'] = df['bootstrap'].astype(int)
-    df = df.set_index(['bootstrap','treatment','timeline'])
-    df = df.unstack(level = 'treatment')
-    print(df.shape)
-
-    # Make sure the columns are treatment and control
-    df.columns = df.columns.droplevel(level = 0)
-    df = df.reset_index(drop = False)
-    
-    ##################################################
-    # Now we can plot
-    main_df = df
-    
-    # Right now we have 500 bootstrap survival curves
-    # ("time","treatment","control","bootstrap")
-    def lower_quantile(series):
-        result = series.quantile(0.025)
-        return result
-
-    def upper_quantile(series):
-        result = series.quantile(0.975)
-        return result
-
-    # We have to stack the data frames separately for treatment and control
-    # df = main_df.where(col('bootstrap') != 999).toPandas()
-    df = main_df.query('bootstrap != 999')
-    df = df.set_index(['timeline','bootstrap'])
-    df = df.rename_axis('treatment', axis=1)
-    df = df.stack()
-    df = pd.DataFrame(df)
-    df.columns = ['surv']
-    df['cum_inc'] = 1 - df['surv']
-    df = df.reset_index(drop = False)
-    print(df.head())
-
-    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
-    df_overall = main_df.query('bootstrap == 999')
-    df_overall = df_overall.set_index(['timeline','bootstrap'])
-    df_overall = df_overall.rename_axis('treatment', axis=1)
-    df_overall = df_overall.stack()
-    df_overall = pd.DataFrame(df_overall)
-    df_overall.columns = ['surv']
-    df_overall['cum_inc'] = 1 - df_overall['surv']
-    df_overall = df_overall.reset_index(drop = False)
-    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
-    # print(df_overall)
-    ###############################################################
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
-    ll = ('cum_inc', lower_quantile),
-    ul = ('cum_inc', upper_quantile)
-    )
-    
-    df = df.reset_index()
-
-    ### NOW WE CAN PLOT
-    set_output_image_type('svg')
-    fig, ax = plt.subplots(1,1, figsize = (11, 6))
-
-    # # Plot the curves for each group
-    # df_overall.query('treatment == "treatment"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'blue', drawstyle="steps-post") # Plot marginal survival curve (averaged) for treated group
-    # df_overall.query('treatment == "control"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'orange', drawstyle="steps-post") # Plot the averaged marginal survival curve for the control group
-
-    # Alternative plotting
-    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
-    df_overall2.index = df_overall2.index.droplevel(level = 0)
-    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
-    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
-    # df_overall2.plot(drawstyle="steps-post", ax = ax)
-    df_overall2.plot(ax = ax)
-    
-    # ax.legend(['Treated', 'Untreated'])
-    ax.legend(title = 'Group')
-
-    # Plot the CI - first for the treated group (using fill_between)
-    ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                    # color = 'orange', alpha = 0.2, step = 'post')
-                    color = 'orange', alpha = 0.2)
-
-    # PLot the CI for the control group
-    ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                    y1 = df.loc[df['treatment'] == "control", 'll'], 
-                    y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                    # color = 'blue', alpha = 0.2, step = 'post')
-                    color = 'blue', alpha = 0.2)
-
-    # ax.set_ylim([0.0, 0.015])
-    ax.set_title('Hospitalization', fontsize=11)
-    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
-    ax.set_xlabel('Time (Days)', fontsize=10)
-    # ax.set_xlim(0, 10)
-    plt.show()
-
-    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 7 AND THE RISK RATIO ON DAY 7
-    # df = main_df.toPandas()
-    df = main_df
-    df = df.set_index(['timeline','bootstrap'])
-    # Now calculate the probability difference
-    df['treatment'] = 1 - df['treatment']
-    df['control'] = 1 - df['control']
-    df['treatment'] = df['treatment']
-    df['control'] = df['control']
-    df['risk_reduction'] = df['control'] - df['treatment']
-    # Now take the risk ratio
-    df['risk_ratio'] = df['treatment']/df['control']
-    print(df.head())
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
-    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
-    risk_reduction_se = ('risk_reduction', np.std),
-    risk_reduction_ll = ('risk_reduction', lower_quantile),
-    risk_reduction_ul = ('risk_reduction', upper_quantile),
-    # Get statistics for the risk ratio
-    risk_ratio = ('risk_ratio', np.mean),
-    risk_ratio_se = ('risk_ratio', np.std),
-    risk_ratio_ll = ('risk_ratio', lower_quantile),
-    risk_ratio_ul = ('risk_ratio', upper_quantile)
-    )
-
-    # Calculate the CI using the SE
-    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - 1.96*df_statistics['risk_ratio_se']
-    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + 1.96*df_statistics['risk_ratio_se']
-    df_statistics = df_statistics.reset_index()
-
-    ############################
-    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
-    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    risk_reduction = control_cuminc - treatment_cuminc
-    risk_ratio = treatment_cuminc/control_cuminc
-
-    # substitute those values into the table
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
-    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
-    ############################
-
-    output_dataframe = df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
-    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
-    output_dataframe['drug'] = 'Paxlovid'
-
-    return output_dataframe
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.266f79f1-7315-4b3b-853a-58479ba33f03"),
-    paxlovid_expanded_data_long_covid=Input(rid="ri.foundry.main.dataset.3d2b0e13-8f89-43c2-b72a-f1e6cad12d67"),
-    prediction_dataset_bootstrapping_paxlovid_LC=Input(rid="ri.foundry.main.dataset.b0bd1564-61f1-49d5-b7a5-64757695b687")
-)
-def paxlovid_marginal_survival_curve_LC_bootstrap(paxlovid_expanded_data_long_covid, prediction_dataset_bootstrapping_paxlovid_LC):
-
-    import datetime
-    import random
-    from functools import reduce
-    from pyspark.sql import DataFrame
-
-    # This node will perform discrete time survival analysis to estimate the marginal survival curves for each treatment group; which are then used to estimate the relative risk of the outcome (hospitalization) on day 28
-
-    # Steps:
-    # 1. Take bootstrap
-    # 2. Fit the propensity model and estimate the weights
-    # 3. With the bootstrap - fit the DTSM
-    # 4. Create prediction datasets 
-    #   a. Prediction dataset for treated patients - use fully expanded dataset with ALL patients with treatment = 1
-    #   b. Prediction dataset for control patients - use fully expanded dataset with ALL patients with treatment = 0
-    # 5. Get predicted hazards in each dataset - under treated and under control
-    # 6. Stack the datasets
-    # 7. Average the hazards by day within each treatment condition = we will end up with 28 rows per treatment group
-    # 8. Take the hazard complement (1 - H) and then calculate the survival curve as the cumulative product (make sure rows are sorted)
-    # 9. We will end up with 28 rows per treatment group; with a "survival curve" column
-
-    ################# NOW WE WILL FIT THE DTSA ###########################
-    # Predictors are: treatment, day indicators, and the predictors
-    df = paxlovid_expanded_data_long_covid
-    # df = df.where(expr('trial <= 3'))
-
-    time_end = 7
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    treatment = 'treatment'
-    outcome = 'outcome'
-    id_column = 'person_id'
-    time_column = 'time'
-    matched_pair_column = 'subclass'
-    
-    # # Set up the outcome model features; and create our dataset for logistic regression (features + outcome)
-    # predictors = ['treatment'] + time_indicator_features + features
-    predictors = [treatment] + time_indicator_features
-    # predictors_no_treatment = time_indicator_features + features
-    predictors_no_treatment = time_indicator_features
-    predictors_plus_outcome = predictors + [outcome]
-    data_subset = df.select([matched_pair_column] + predictors_plus_outcome)
-
-    ############# INCLUDE INTERACTIONS BETWEEN TREATMENT AND TIME INDICATORS ######
-    # When we include this product - we do NOT include treatment as a predictor in the model ##### This will give us Tmt * Time, and Tmt * Predictors
-    time_dependent_features = []
-    for pred in predictors_no_treatment:
-        data_subset = data_subset.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        time_dependent_features.append('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred))
-
-    # # Calculate interactions between each time indicator AND each predictor. This will give us Time * Predictors
-    # time_dependent_interactions = []
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         data_subset = data_subset.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    #         time_dependent_interactions.append('{}_x_{}'.format(time_indicator, feature))
-
-    # Add the interactions between tmt * time indicators to the predictors object
-    predictors = time_indicator_features + time_dependent_features
-    print('final features:', predictors)
-
-    ###### SET UP THE SAME FOR THE PREDICTION DATASET ###########
-    # Set up the prediction df - this only contains the predictors. Calculate the interactions between tmt * time as above. 
-    prediction_df = prediction_dataset_bootstrapping_paxlovid_LC
-    for pred in predictors_no_treatment:
-        prediction_df = prediction_df.withColumn('{treatment}_x_{predictor}'.format(treatment = treatment, predictor = pred), expr('{treatment} * {predictor}'.format(treatment = treatment, predictor = pred)))
-        
-    # for time_indicator in time_indicator_features:
-    #     for feature in features:
-    #         prediction_df = prediction_df.withColumn('{}_x_{}'.format(time_indicator, feature), expr('{} * {}'.format(time_indicator, feature)))
-    
-    ####### SPARK ML LOGISTIC REGRESSION MODEL #######################
-    from pyspark.sql import SparkSession
-    from pyspark import SparkFiles
-    from pyspark.ml.classification import LogisticRegression
-    from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
-    from pyspark.ml.feature import VectorAssembler
-
-    ############ PERFORM BOOTSTRAPPING ##########################
-    # Identify the unique subclasses - we will bootstrap the subclasses
-    unique_subclasses = df.select('subclass').distinct()
-    n_unique_subclasses = unique_subclasses.count()
-
-    # Create empty list to store bootstrap output
-
-    Output_Prediction_DataFrames = []
-    
-    # Now, perform the bootstrapping
-    for i in np.arange(0, 300):
-
-        # First - get a sample of the subclasses with replacement
-        random.seed(a = i)
-        sampled_subclasses_df = unique_subclasses.sample(fraction=1.0, seed=i, withReplacement=True)
-
-        # Use the subclass dataframe to filter the original dataframe (randomly select matched pairs)
-        data_subset_sample = sampled_subclasses_df.join(data_subset, on = 'subclass', how = 'inner')
-
-        # Set up the vector assembler. The "predictors" object is a list containing the treatment, time indicators, and treatment * time indicators
-        assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-        data_subset_sample = assembler.transform(data_subset_sample)
-        prediction_subset = assembler.transform(prediction_df) # Transform the prediction_df also; 
-
-        # Set up the LogisticRegression
-        logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-        labelCol = outcome, 
-        family = 'binomial', 
-        maxIter = 1000, 
-        regParam = 0.0, 
-        elasticNetParam = 1.0,
-        fitIntercept=False,
-        # weightCol = 'SW'
-        )
-
-        # Fit the DTSA model to the data
-        model = logistic_regression.fit(data_subset_sample)
-
-        # # Print out the coefficients
-        # coefficients = model.coefficients
-        # intercept = model.intercept
-        # print("Coefficients: ", coefficients)
-        # print("Intercept: {:.3f}".format(intercept))
-
-        # Get the predictions; Function below extracts the probability of the outcome (= 1)
-        def ith_(v, i):
-            try:
-                return float(v[i])
-            except ValueError:
-                return None
-
-        ith = udf(ith_, DoubleType())
-
-        # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-        denominator_predictions = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-        denominator_predictions = denominator_predictions.withColumn('bootstrap', lit('{}'.format(i)))
-
-        # A. Now get the survival function 
-        denominator_predictions = denominator_predictions.withColumn('survival', expr('1 - hazard'))
-        
-        # Calculate the cumulative product of the hazard complements (the conditional survival probability) within each treatment. This is already grouped by treatment and time. 
-        window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-
-        # Add the bootstrap column 
-        denominator_predictions = denominator_predictions.withColumn('survival', product(col('survival')).over(window))
-
-        # Append the prediction Spark dataframe to our list
-        Output_Prediction_DataFrames.append(denominator_predictions)
-
-        print('bootstrap {} completed'.format(i))
-
-    ################ FIT THE MODEL IN THE FULL DATAT TO GET THE POINT ESTIMATE ##############################################
-
-    #### SET UP ELEMENTS FOR SPARK LR
-    assembler = VectorAssembler(inputCols = predictors, outputCol = 'predictors')
-
-    # Transform the input dataset (optional) and the prediction dataset
-    data_subset_sample = assembler.transform(data_subset)
-    prediction_subset = assembler.transform(prediction_df)  
-
-    # Set up the LogisticRegression; we are not using weights
-    logistic_regression = LogisticRegression(featuresCol = 'predictors', 
-    labelCol = outcome, 
-    family = 'binomial', 
-    maxIter = 1000, 
-    regParam = 0.0, 
-    elasticNetParam = 1.0,
-    fitIntercept=False,
-    # weightCol = weight_column,
-    )
-
-    # Fit the model to the data
-    model = logistic_regression.fit(data_subset_sample)
-
-    # # Print out the coefficients
-    # coefficients = model.coefficients
-    # intercept = model.intercept
-    # print("Coefficients: ", coefficients)
-    # print("Intercept: {:.3f}".format(intercept))
-
-    # Get the predictions; Function below extracts the probability of the outcome (= 1)
-    def ith_(v, i):
-        try:
-            return float(v[i])
-        except ValueError:
-            return None
-
-    ith = udf(ith_, DoubleType())
-
-    # Get predictions for the prediction data. We want the treatment column, day column, and the hazard probability 
-    prediction_output_df = model.transform(prediction_subset).select([treatment, time_column] + [ith(col('probability'), lit(1)).alias('hazard')])
-    prediction_output_df = prediction_output_df.withColumn('bootstrap', lit(999))
-
-    # Get the survival function for each patient BEFORE averaging that
-    prediction_output_df = prediction_output_df.withColumn('survival', expr('1 - hazard'))
-    
-    # Calculate cumulative product of conditional survival probability (within each treatment)
-    window = Window.partitionBy([treatment]).orderBy(time_column).rowsBetween(Window.unboundedPreceding,Window.currentRow)
-    prediction_output_df = prediction_output_df.withColumn('survival', product(col('survival')).over(window))
-
-    # Append the point estimate dataframe to our list
-    Output_Prediction_DataFrames.append(prediction_output_df)
-    
-
-    ##################### FINALLY CONCATENATE ALL THE PREDICTIONS OUTPUTS INTO A SINGLE DATA FRAME ####################
-    denominator_predictions_stacked = reduce(DataFrame.unionAll, Output_Prediction_DataFrames)
-
-    return denominator_predictions_stacked
-    
-    
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.15d987cb-52c0-4fae-a754-b2cc581c4a05"),
-    paxlovid_bootstrap_DTSA_composite=Input(rid="ri.foundry.main.dataset.b8ad3326-707a-4073-9e8f-0c8317bdfb2e")
-)
-# Get Marginal Survival Curve AND Relative Risk (74510b8a-a5ee-4073-8a51-5eedf5f6d708): v3
-def paxlovid_marginal_survival_curve_composite(paxlovid_bootstrap_DTSA_composite):
-    DF = paxlovid_bootstrap_DTSA_composite
-
-    treatment = 'treatment'
-    time_end = 14
-    step_plot = False
-
-    # This node performs the bootstrapping survival curves and estimates the relative risk of the outcome on day 30
-
-    df = DF.withColumn('treatment', expr('CASE WHEN {} = 0 THEN "control" ELSE "treatment" END'.format(treatment))).withColumnRenamed("time","timeline").select("timeline","treatment","bootstrap","survival")
-    df = df.toPandas()
-    df['bootstrap'] = df['bootstrap'].astype(int)
-    df = df.set_index(['bootstrap','treatment','timeline'])
-    df = df.unstack(level = 'treatment')
-    print(df.shape)
-
-    # Make sure the columns are treatment and control
-    df.columns = df.columns.droplevel(level = 0)
-    df = df.reset_index(drop = False)
-    
-    ##################################################
-    # Now we can plot
-    main_df = df
-    
-    # Right now we have 500 bootstrap survival curves
-    # ("time","treatment","control","bootstrap")
-    def lower_quantile(series):
-        result = series.quantile(0.025)
-        return result
-
-    def upper_quantile(series):
-        result = series.quantile(0.975)
-        return result
-
-    # We have to stack the data frames separately for treatment and control
-    # df = main_df.where(col('bootstrap') != 999).toPandas()
-    df = main_df.query('bootstrap != 999')
-    df = df.set_index(['timeline','bootstrap'])
-    df = df.rename_axis('treatment', axis=1)
-    df = df.stack()
-    df = pd.DataFrame(df)
-    df.columns = ['surv']
-    df['cum_inc'] = 1 - df['surv']
-    df = df.reset_index(drop = False)
-    print(df.head())
-
-    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
-    df_overall = main_df.query('bootstrap == 999')
-    df_overall = df_overall.set_index(['timeline','bootstrap'])
-    df_overall = df_overall.rename_axis('treatment', axis=1)
-    df_overall = df_overall.stack()
-    df_overall = pd.DataFrame(df_overall)
-    df_overall.columns = ['surv']
-    df_overall['cum_inc'] = 1 - df_overall['surv']
-    df_overall = df_overall.reset_index(drop = False)
-    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
-    # print(df_overall)
-    ###############################################################
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
-    ll = ('cum_inc', lower_quantile),
-    ul = ('cum_inc', upper_quantile)
-    )
-    
-    df = df.reset_index()
-
-    ### NOW WE CAN PLOT
-    set_output_image_type('svg')
-    fig, ax = plt.subplots(1,1, figsize = (11, 6))
-
-    # # Plot the curves for each group
-    # df_overall.query('treatment == "treatment"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'blue', drawstyle="steps-post") # Plot marginal survival curve (averaged) for treated group
-    # df_overall.query('treatment == "control"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'orange', drawstyle="steps-post") # Plot the averaged marginal survival curve for the control group
-
-    # Alternative plotting
-    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
-    df_overall2.index = df_overall2.index.droplevel(level = 0)
-    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
-    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
-    if step_plot:
-        df_overall2.plot(drawstyle="steps-post", ax = ax)
-    else:
-        df_overall2.plot(ax = ax)
-    
-    # ax.legend(['Treated', 'Untreated'])
-    ax.legend(title = 'Group')
-
-    # Plot the CI - first for the treated group (using fill_between)
-    if step_plot:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                        color = 'orange', alpha = 0.2, step = 'post')
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2, step = 'post')
-    else:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                    color = 'orange', alpha = 0.2)
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2)
-
-    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
-    ax.set_title('Composite - ED visit, hospitalization, supplemental oxygen, or death', fontsize=11)
-    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
-    ax.set_xlabel('Time (Days)', fontsize=10)
-    plt.show()
-
-    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
-    # df = main_df.toPandas()
-    df = main_df
-    df = df.set_index(['timeline','bootstrap'])
-    # Now calculate the probability difference
-    df['treatment'] = 1 - df['treatment']
-    df['control'] = 1 - df['control']
-    df['treatment'] = df['treatment']
-    df['control'] = df['control']
-    df['risk_reduction'] = df['control'] - df['treatment']
-    # Now take the risk ratio
-    df['risk_ratio'] = df['treatment']/df['control']
-    print(df.head())
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
-    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
-    risk_reduction_se = ('risk_reduction', np.std),
-    risk_reduction_ll = ('risk_reduction', lower_quantile),
-    risk_reduction_ul = ('risk_reduction', upper_quantile),
-    # Get statistics for the risk ratio
-    risk_ratio = ('risk_ratio', np.mean),
-    risk_ratio_se = ('risk_ratio', np.std),
-    risk_ratio_ll = ('risk_ratio', lower_quantile),
-    risk_ratio_ul = ('risk_ratio', upper_quantile)
-    )
-
-    # Calculate the CI using the SE
-    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - 1.96*df_statistics['risk_ratio_se']
-    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + 1.96*df_statistics['risk_ratio_se']
-    df_statistics = df_statistics.reset_index()
-
-    ############################
-    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
-    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    risk_reduction = control_cuminc - treatment_cuminc
-    risk_ratio = treatment_cuminc/control_cuminc
-
-    # substitute those values into the table
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
-    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
-    ############################
-
-    output_dataframe = df_statistics.loc[df_statistics['timeline'] == 14, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
-    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
-    output_dataframe['drug'] = 'Paxlovid'
-
-    return output_dataframe
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.c491c8ca-8112-422e-b361-d46b411e524d"),
-    paxlovid_bootstrap_DTSA_compositedeathhosp=Input(rid="ri.foundry.main.dataset.a81d7b76-0066-4fc5-a522-5fdaf39b5128")
-)
-# Get Marginal Survival Curve AND Relative Risk (74510b8a-a5ee-4073-8a51-5eedf5f6d708): v3
-def paxlovid_marginal_survival_curve_compositedeathhosp(paxlovid_bootstrap_DTSA_compositedeathhosp):
-    DF = paxlovid_bootstrap_DTSA_compositedeathhosp
-
-    treatment = 'treatment'
-    time_end = 14
-    step_plot = False
-
-    # This node performs the bootstrapping survival curves and estimates the relative risk of the outcome on day 30
-
-    df = DF.withColumn('treatment', expr('CASE WHEN {} = 0 THEN "control" ELSE "treatment" END'.format(treatment))).withColumnRenamed("time","timeline").select("timeline","treatment","bootstrap","survival")
-    df = df.toPandas()
-    df['bootstrap'] = df['bootstrap'].astype(int)
-    df = df.set_index(['bootstrap','treatment','timeline'])
-    df = df.unstack(level = 'treatment')
-    print(df.shape)
-
-    # Make sure the columns are treatment and control
-    df.columns = df.columns.droplevel(level = 0)
-    df = df.reset_index(drop = False)
-    
-    ##################################################
-    # Now we can plot
-    main_df = df
-    
-    # Right now we have 500 bootstrap survival curves
-    # ("time","treatment","control","bootstrap")
-    def lower_quantile(series):
-        result = series.quantile(0.025)
-        return result
-
-    def upper_quantile(series):
-        result = series.quantile(0.975)
-        return result
-
-    # We have to stack the data frames separately for treatment and control
-    # df = main_df.where(col('bootstrap') != 999).toPandas()
-    df = main_df.query('bootstrap != 999')
-    df = df.set_index(['timeline','bootstrap'])
-    df = df.rename_axis('treatment', axis=1)
-    df = df.stack()
-    df = pd.DataFrame(df)
-    df.columns = ['surv']
-    df['cum_inc'] = 1 - df['surv']
-    df = df.reset_index(drop = False)
-    print(df.head())
-
-    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
-    df_overall = main_df.query('bootstrap == 999')
-    df_overall = df_overall.set_index(['timeline','bootstrap'])
-    df_overall = df_overall.rename_axis('treatment', axis=1)
-    df_overall = df_overall.stack()
-    df_overall = pd.DataFrame(df_overall)
-    df_overall.columns = ['surv']
-    df_overall['cum_inc'] = 1 - df_overall['surv']
-    df_overall = df_overall.reset_index(drop = False)
-    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
-    # print(df_overall)
-    ###############################################################
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
-    ll = ('cum_inc', lower_quantile),
-    ul = ('cum_inc', upper_quantile)
-    )
-    
-    df = df.reset_index()
-
-    ### NOW WE CAN PLOT
-    set_output_image_type('svg')
-    fig, ax = plt.subplots(1,1, figsize = (11, 6))
-
-    # # Plot the curves for each group
-    # df_overall.query('treatment == "treatment"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'blue', drawstyle="steps-post") # Plot marginal survival curve (averaged) for treated group
-    # df_overall.query('treatment == "control"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'orange', drawstyle="steps-post") # Plot the averaged marginal survival curve for the control group
-
-    # Alternative plotting
-    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
-    df_overall2.index = df_overall2.index.droplevel(level = 0)
-    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
-    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
-    if step_plot:
-        df_overall2.plot(drawstyle="steps-post", ax = ax)
-    else:
-        df_overall2.plot(ax = ax)
-    
-    # ax.legend(['Treated', 'Untreated'])
-    ax.legend(title = 'Group')
-
-    # Plot the CI - first for the treated group (using fill_between)
-    if step_plot:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                        color = 'orange', alpha = 0.2, step = 'post')
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2, step = 'post')
-    else:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                    color = 'orange', alpha = 0.2)
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2)
-
-    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
-    ax.set_title('Hospitalization or Death', fontsize=11)
-    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
-    ax.set_xlabel('Time (Days)', fontsize=10)
-    plt.show()
-
-    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
-    # df = main_df.toPandas()
-    df = main_df
-    df = df.set_index(['timeline','bootstrap'])
-    # Now calculate the probability difference
-    df['treatment'] = 1 - df['treatment']
-    df['control'] = 1 - df['control']
-    df['treatment'] = df['treatment']
-    df['control'] = df['control']
-    df['risk_reduction'] = df['control'] - df['treatment']
-    # Now take the risk ratio
-    df['risk_ratio'] = df['treatment']/df['control']
-    print(df.head())
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
-    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
-    risk_reduction_se = ('risk_reduction', np.std),
-    risk_reduction_ll = ('risk_reduction', lower_quantile),
-    risk_reduction_ul = ('risk_reduction', upper_quantile),
-    # Get statistics for the risk ratio
-    risk_ratio = ('risk_ratio', np.mean),
-    risk_ratio_se = ('risk_ratio', np.std),
-    risk_ratio_ll = ('risk_ratio', lower_quantile),
-    risk_ratio_ul = ('risk_ratio', upper_quantile)
-    )
-
-    # Calculate the CI using the SE
-    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - 1.96*df_statistics['risk_ratio_se']
-    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + 1.96*df_statistics['risk_ratio_se']
-    df_statistics = df_statistics.reset_index()
-
-    ############################
-    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
-    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    risk_reduction = control_cuminc - treatment_cuminc
-    risk_ratio = treatment_cuminc/control_cuminc
-
-    # substitute those values into the table
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
-    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
-    ############################
-
-    output_dataframe = df_statistics.loc[df_statistics['timeline'] == 14, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
-    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
-    output_dataframe['drug'] = 'Paxlovid'
-
-    return output_dataframe
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.5510c5c0-44e4-4f2a-a943-17e7769544d6"),
-    paxlovid_bootstrap_DTSA_death=Input(rid="ri.foundry.main.dataset.3993bec5-34a6-47d9-b910-6698d1c77119")
-)
-# Get Marginal Survival Curve AND Relative Risk (74510b8a-a5ee-4073-8a51-5eedf5f6d708): v3
-def paxlovid_marginal_survival_curve_death(paxlovid_bootstrap_DTSA_death):
-    DF = paxlovid_bootstrap_DTSA_death
-
-    treatment = 'treatment'
-    time_end = 14
-    step_plot = False
-
-    # This node performs the bootstrapping survival curves and estimates the relative risk of the outcome on day 30
-
-    df = DF.withColumn('treatment', expr('CASE WHEN {} = 0 THEN "control" ELSE "treatment" END'.format(treatment))).withColumnRenamed("time","timeline").select("timeline","treatment","bootstrap","survival")
-    df = df.toPandas()
-    df['bootstrap'] = df['bootstrap'].astype(int)
-    df = df.set_index(['bootstrap','treatment','timeline'])
-    df = df.unstack(level = 'treatment')
-    print(df.shape)
-
-    # Make sure the columns are treatment and control
-    df.columns = df.columns.droplevel(level = 0)
-    df = df.reset_index(drop = False)
-    
-    ##################################################
-    # Now we can plot
-    main_df = df
-    
-    # Right now we have 500 bootstrap survival curves
-    # ("time","treatment","control","bootstrap")
-    def lower_quantile(series):
-        result = series.quantile(0.025)
-        return result
-
-    def upper_quantile(series):
-        result = series.quantile(0.975)
-        return result
-
-    # We have to stack the data frames separately for treatment and control
-    # df = main_df.where(col('bootstrap') != 999).toPandas()
-    df = main_df.query('bootstrap != 999')
-    df = df.set_index(['timeline','bootstrap'])
-    df = df.rename_axis('treatment', axis=1)
-    df = df.stack()
-    df = pd.DataFrame(df)
-    df.columns = ['surv']
-    df['cum_inc'] = 1 - df['surv']
-    df = df.reset_index(drop = False)
-    print(df.head())
-
-    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
-    df_overall = main_df.query('bootstrap == 999')
-    df_overall = df_overall.set_index(['timeline','bootstrap'])
-    df_overall = df_overall.rename_axis('treatment', axis=1)
-    df_overall = df_overall.stack()
-    df_overall = pd.DataFrame(df_overall)
-    df_overall.columns = ['surv']
-    df_overall['cum_inc'] = 1 - df_overall['surv']
-    df_overall = df_overall.reset_index(drop = False)
-    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
-    # print(df_overall)
-    ###############################################################
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
-    ll = ('cum_inc', lower_quantile),
-    ul = ('cum_inc', upper_quantile)
-    )
-    
-    df = df.reset_index()
-
-    ### NOW WE CAN PLOT
-    set_output_image_type('svg')
-    fig, ax = plt.subplots(1,1, figsize = (11, 6))
-
-    # # Plot the curves for each group
-    # df_overall.query('treatment == "treatment"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'blue', drawstyle="steps-post") # Plot marginal survival curve (averaged) for treated group
-    # df_overall.query('treatment == "control"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'orange', drawstyle="steps-post") # Plot the averaged marginal survival curve for the control group
-
-    # Alternative plotting
-    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
-    df_overall2.index = df_overall2.index.droplevel(level = 0)
-    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
-    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
-    if step_plot:
-        df_overall2.plot(drawstyle="steps-post", ax = ax)
-    else:
-        df_overall2.plot(ax = ax)
-    
-    # ax.legend(['Treated', 'Untreated'])
-    ax.legend(title = 'Group')
-
-    # Plot the CI - first for the treated group (using fill_between)
-    if step_plot:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                        color = 'orange', alpha = 0.2, step = 'post')
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2, step = 'post')
-    else:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                    color = 'orange', alpha = 0.2)
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2)
-
-    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
-    ax.set_title('Death', fontsize=11)
-    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
-    ax.set_xlabel('Time (Days)', fontsize=10)
-    plt.show()
-
-    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
-    # df = main_df.toPandas()
-    df = main_df
-    df = df.set_index(['timeline','bootstrap'])
-    # Now calculate the probability difference
-    df['treatment'] = 1 - df['treatment']
-    df['control'] = 1 - df['control']
-    df['treatment'] = df['treatment']
-    df['control'] = df['control']
-    df['risk_reduction'] = df['control'] - df['treatment']
-    # Now take the risk ratio
-    df['risk_ratio'] = df['treatment']/df['control']
-    print(df.head())
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
-    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
-    risk_reduction_se = ('risk_reduction', np.std),
-    risk_reduction_ll = ('risk_reduction', lower_quantile),
-    risk_reduction_ul = ('risk_reduction', upper_quantile),
-    # Get statistics for the risk ratio
-    risk_ratio = ('risk_ratio', np.mean),
-    risk_ratio_se = ('risk_ratio', np.std),
-    risk_ratio_ll = ('risk_ratio', lower_quantile),
-    risk_ratio_ul = ('risk_ratio', upper_quantile)
-    )
-
-    # Calculate the CI using the SE
-    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - 1.96*df_statistics['risk_ratio_se']
-    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + 1.96*df_statistics['risk_ratio_se']
-    df_statistics = df_statistics.reset_index()
-
-    ############################
-    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
-    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    risk_reduction = control_cuminc - treatment_cuminc
-    risk_ratio = treatment_cuminc/control_cuminc
-
-    # substitute those values into the table
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
-    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
-    ############################
-
-    output_dataframe = df_statistics.loc[df_statistics['timeline'] == 14, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
-    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
-    output_dataframe['drug'] = 'Paxlovid'
-
-    return output_dataframe
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.eea6696b-8640-4f79-86e9-d53c9aa772a7"),
-    paxlovid_bootstrap_DTSA_modcomposite=Input(rid="ri.foundry.main.dataset.79d27717-1ad0-4c1a-9590-cc4beda25648")
-)
-# Get Marginal Survival Curve AND Relative Risk (74510b8a-a5ee-4073-8a51-5eedf5f6d708): v3
-def paxlovid_marginal_survival_curve_modcomposite(paxlovid_bootstrap_DTSA_modcomposite):
-    DF = paxlovid_bootstrap_DTSA_modcomposite
-
-    treatment = 'treatment'
-    time_end = 14
-    step_plot = False
-
-    # This node performs the bootstrapping survival curves and estimates the relative risk of the outcome on day 30
-
-    df = DF.withColumn('treatment', expr('CASE WHEN {} = 0 THEN "control" ELSE "treatment" END'.format(treatment))).withColumnRenamed("time","timeline").select("timeline","treatment","bootstrap","survival")
-    df = df.toPandas()
-    df['bootstrap'] = df['bootstrap'].astype(int)
-    df = df.set_index(['bootstrap','treatment','timeline'])
-    df = df.unstack(level = 'treatment')
-    print(df.shape)
-
-    # Make sure the columns are treatment and control
-    df.columns = df.columns.droplevel(level = 0)
-    df = df.reset_index(drop = False)
-    
-    ##################################################
-    # Now we can plot
-    main_df = df
-    
-    # Right now we have 500 bootstrap survival curves
-    # ("time","treatment","control","bootstrap")
-    def lower_quantile(series):
-        result = series.quantile(0.025)
-        return result
-
-    def upper_quantile(series):
-        result = series.quantile(0.975)
-        return result
-
-    # We have to stack the data frames separately for treatment and control
-    # df = main_df.where(col('bootstrap') != 999).toPandas()
-    df = main_df.query('bootstrap != 999')
-    df = df.set_index(['timeline','bootstrap'])
-    df = df.rename_axis('treatment', axis=1)
-    df = df.stack()
-    df = pd.DataFrame(df)
-    df.columns = ['surv']
-    df['cum_inc'] = 1 - df['surv']
-    df = df.reset_index(drop = False)
-    print(df.head())
-
-    ######## NEW CODE - REPEAT FOR THE OVERALL CURVE ##############
-    df_overall = main_df.query('bootstrap == 999')
-    df_overall = df_overall.set_index(['timeline','bootstrap'])
-    df_overall = df_overall.rename_axis('treatment', axis=1)
-    df_overall = df_overall.stack()
-    df_overall = pd.DataFrame(df_overall)
-    df_overall.columns = ['surv']
-    df_overall['cum_inc'] = 1 - df_overall['surv']
-    df_overall = df_overall.reset_index(drop = False)
-    df_overall = df_overall.sort_values(by = ['treatment','timeline'])
-    # print(df_overall)
-    ###############################################################
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.groupby(['treatment', 'timeline']).agg(mean_cum_inc = ('cum_inc', np.mean),
-    ll = ('cum_inc', lower_quantile),
-    ul = ('cum_inc', upper_quantile)
-    )
-    
-    df = df.reset_index()
-
-    ### NOW WE CAN PLOT
-    set_output_image_type('svg')
-    fig, ax = plt.subplots(1,1, figsize = (11, 6))
-
-    # # Plot the curves for each group
-    # df_overall.query('treatment == "treatment"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'blue', drawstyle="steps-post") # Plot marginal survival curve (averaged) for treated group
-    # df_overall.query('treatment == "control"').plot(x = 'timeline', y = 'cum_inc', ax = ax, color = 'orange', drawstyle="steps-post") # Plot the averaged marginal survival curve for the control group
-
-    # Alternative plotting
-    df_overall2 = df_overall.drop('surv', axis=1).set_index(['bootstrap','treatment','timeline']).unstack(level = 'treatment')
-    df_overall2.index = df_overall2.index.droplevel(level = 0)
-    df_overall2.columns = df_overall2.columns.droplevel(level = 0)
-    df_overall2 = df_overall2.rename(columns = {'control':'Untreated', 'treatment':'Treated'})
-    if step_plot:
-        df_overall2.plot(drawstyle="steps-post", ax = ax)
-    else:
-        df_overall2.plot(ax = ax)
-    
-    # ax.legend(['Treated', 'Untreated'])
-    ax.legend(title = 'Group')
-
-    # Plot the CI - first for the treated group (using fill_between)
-    if step_plot:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                        y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                        color = 'orange', alpha = 0.2, step = 'post')
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2, step = 'post')
-    else:
-        ax.fill_between(x = df.loc[df['treatment'] == "treatment", 'timeline'], 
-                    y1 = df.loc[df['treatment'] == "treatment", 'll'], 
-                    y2 = df.loc[df['treatment'] == "treatment", 'ul'], 
-                    color = 'orange', alpha = 0.2)
-
-        # PLot the CI for the control group
-        ax.fill_between(x = df.loc[df['treatment'] == "control", 'timeline'], 
-                        y1 = df.loc[df['treatment'] == "control", 'll'], 
-                        y2 = df.loc[df['treatment'] == "control", 'ul'], 
-                        color = 'blue', alpha = 0.2)
-
-    ax.set_ylim([0.0, df['mean_cum_inc'].max() + 0.05 * df['mean_cum_inc'].max()])
-    ax.set_title('Composite - ED visit, hospitalization, or death', fontsize=11)
-    ax.set_ylabel('Cumulative Incidence (%)', fontsize=10)
-    ax.set_xlabel('Time (Days)', fontsize=10)
-    plt.show()
-
-    # ##### NEXT WE WANT TO CALCULATE THE PROBABILITY DIFFERENCE ON DAY 28 AND THE RISK RATIO ON DAY 28
-    # df = main_df.toPandas()
-    df = main_df
-    df = df.set_index(['timeline','bootstrap'])
-    # Now calculate the probability difference
-    df['treatment'] = 1 - df['treatment']
-    df['control'] = 1 - df['control']
-    df['treatment'] = df['treatment']
-    df['control'] = df['control']
-    df['risk_reduction'] = df['control'] - df['treatment']
-    # Now take the risk ratio
-    df['risk_ratio'] = df['treatment']/df['control']
-    print(df.head())
-
-    # Aggregate the curves by treatment and day; get the mean survival and the lower and upper limits
-    df = df.query('bootstrap != 999') #### WE NEED TO ADD THIS
-    df_statistics = df.groupby(['timeline']).agg(risk_reduction = ('risk_reduction', np.mean),
-    risk_reduction_se = ('risk_reduction', np.std),
-    risk_reduction_ll = ('risk_reduction', lower_quantile),
-    risk_reduction_ul = ('risk_reduction', upper_quantile),
-    # Get statistics for the risk ratio
-    risk_ratio = ('risk_ratio', np.mean),
-    risk_ratio_se = ('risk_ratio', np.std),
-    risk_ratio_ll = ('risk_ratio', lower_quantile),
-    risk_ratio_ul = ('risk_ratio', upper_quantile)
-    )
-
-    # Calculate the CI using the SE
-    df_statistics['risk_ratio_lower95'] = df_statistics['risk_ratio'] - 1.96*df_statistics['risk_ratio_se']
-    df_statistics['risk_ratio_upper95'] = df_statistics['risk_ratio'] + 1.96*df_statistics['risk_ratio_se']
-    df_statistics = df_statistics.reset_index()
-
-    ############################
-    #### We need to swap the risk reduction and the risk ratio with the point estimate from the full sample
-    control_cuminc = df_overall.loc[(df_overall['treatment'] == 'control') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    treatment_cuminc = df_overall.loc[(df_overall['treatment'] == 'treatment') & (df_overall['timeline'] == time_end), 'cum_inc'].values[0]
-    risk_reduction = control_cuminc - treatment_cuminc
-    risk_ratio = treatment_cuminc/control_cuminc
-
-    # substitute those values into the table
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_ratio'] = risk_ratio
-    df_statistics.loc[(df_statistics['timeline'] == time_end), 'risk_reduction'] = risk_reduction
-    print(df_statistics.loc[df_statistics['timeline'] == time_end, ['risk_ratio','risk_ratio_ll','risk_ratio_ul']])
-    ############################
-
-    output_dataframe = df_statistics.loc[df_statistics['timeline'] == 14, ['risk_ratio','risk_ratio_ll','risk_ratio_ul','risk_reduction','risk_reduction_ll','risk_reduction_ul']]
-    output_dataframe.columns = ['Relative_Risk','Relative_Risk_Lower_Limit','Relative_Risk_Upper_Limit','Risk_Reduction','Risk_Reduction_Lower_Limit','Risk_Reduction_Upper_Limit']
-    output_dataframe['drug'] = 'Paxlovid'
-
-    return output_dataframe
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.3c4d041c-a2d8-46b6-8382-8ccae890879b"),
-    expanded_dataset_for_outcome_analysis_matching=Input(rid="ri.foundry.main.dataset.32ef28d9-6ad8-4b41-8a63-c6e4e37036d9"),
-    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
-)
-# Prepare Prediction Dataset (526217de-22d9-4b74-a4ec-bee49edb1a8f): v0
-def prediction_dataset_bootstrapping_composite(expanded_dataset_for_outcome_analysis_matching, nearest_neighbor_matching_all):
-
-    use_simple_prediction_dataset = True
-
-    ##### STEP 1 - CREATE CROSS JOIN BETWEEN DAYS 1-28 AND DISTINCT PERSON_ID #######
-    # We need to expand the dataset so each person has 1 row per day
-    time_end = 14
-    time_column = 'time'
-    trial_column = 'trial'
-    treatment = 'treatment'
-    id_column = 'person_id'
-    days = np.arange(1, time_end + 1)
-    days_df = pd.DataFrame({time_column: days})
-    days_df = spark.createDataFrame(days_df)
-    person_df = expanded_dataset_for_outcome_analysis_matching.select('person_id').distinct()
-    
-    # Create cross join
-    full_join = person_df.join(days_df)
-    
-    # Join cross join to our input dataset to expand it
-    df = nearest_neighbor_matching_all.select('person_id','trial','subclass','distance',treatment)
-    df = full_join.join(df, on = 'person_id', how = 'inner')
-
-    # # Join to the propensity model dataset to get the features. This will merge ALL predictors on each trial (trials 1-5) with every 30-day block (each block having days 1-30). DAY is the trial column. 
-    # df = df.join(paxlovid_propensity_model_dataset_prep, on = ['person_id','day'], how = 'inner')
-
-    ######## STEP 2 - CREATE THE TIME INDICATORS -28 TIME INDICATORS ###################################
-    for i in np.arange(1, time_end + 1):
-        df = df.withColumn('d{}'.format(i), lit(0))
-        df = df.withColumn('d{}'.format(i), expr('CASE WHEN time = {} THEN 1 ELSE d{} END'.format(i, i)))
-
-    #### What columns do we need in the prediction dataset? Treatment, Time, Predictors
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    # predictors = Model_predictors['predictors'].tolist()
-
-    # # Create a final list of output features. We will include "day" so we can aggregate later
-    final_columns = [trial_column] + [time_column] + [treatment] + time_indicator_features 
-    
-    # Filter to the final column list
-    df = df.select(['person_id'] + final_columns)
-
-    # Create separate datasets where everyone is treatment and control and then stack them
-    treated = df.withColumn(treatment, lit(1))
-    control = df.withColumn(treatment, lit(0))
-
-    # Union the datasets
-    df = treated.union(control)
-
-    # Group the datasets by treatment group and indicator
-    aggregations = [mean(col(column)).alias(column) for column in time_indicator_features]
-    
-    if use_simple_prediction_dataset:
-        # df = df.groupBy([id_column, treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-        df = df.groupBy([treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-
-    return df
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.fe128665-5d79-4cbb-9fad-a776395fa0a6"),
-    expanded_dataset_for_outcome_analysis_matching_compositedeathhosp=Input(rid="ri.foundry.main.dataset.1b4818d5-123b-4f59-a7b8-a341d2330a85"),
-    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
-)
-# Prepare Prediction Dataset (526217de-22d9-4b74-a4ec-bee49edb1a8f): v0
-def prediction_dataset_bootstrapping_compositedeathhosp(expanded_dataset_for_outcome_analysis_matching_compositedeathhosp, nearest_neighbor_matching_all):
-
-    use_simple_prediction_dataset = True
-
-    ##### STEP 1 - CREATE CROSS JOIN BETWEEN DAYS 1-28 AND DISTINCT PERSON_ID #######
-    # We need to expand the dataset so each person has 1 row per day
-    time_end = 14
-    time_column = 'time'
-    trial_column = 'trial'
-    treatment = 'treatment'
-    id_column = 'person_id'
-    days = np.arange(1, time_end + 1)
-    days_df = pd.DataFrame({time_column: days})
-    days_df = spark.createDataFrame(days_df)
-    person_df = expanded_dataset_for_outcome_analysis_matching_compositedeathhosp.select('person_id').distinct()
-    
-    # Create cross join
-    full_join = person_df.join(days_df)
-    
-    # Join cross join to our input dataset to expand it
-    df = nearest_neighbor_matching_all.select('person_id','trial','subclass','distance',treatment)
-    df = full_join.join(df, on = 'person_id', how = 'inner')
-
-    # # Join to the propensity model dataset to get the features. This will merge ALL predictors on each trial (trials 1-5) with every 30-day block (each block having days 1-30). DAY is the trial column. 
-    # df = df.join(paxlovid_propensity_model_dataset_prep, on = ['person_id','day'], how = 'inner')
-
-    ######## STEP 2 - CREATE THE TIME INDICATORS -28 TIME INDICATORS ###################################
-    for i in np.arange(1, time_end + 1):
-        df = df.withColumn('d{}'.format(i), lit(0))
-        df = df.withColumn('d{}'.format(i), expr('CASE WHEN time = {} THEN 1 ELSE d{} END'.format(i, i)))
-
-    #### What columns do we need in the prediction dataset? Treatment, Time, Predictors
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    # predictors = Model_predictors['predictors'].tolist()
-
-    # # Create a final list of output features. We will include "day" so we can aggregate later
-    final_columns = [trial_column] + [time_column] + [treatment] + time_indicator_features 
-    
-    # Filter to the final column list
-    df = df.select(['person_id'] + final_columns)
-
-    # Create separate datasets where everyone is treatment and control and then stack them
-    treated = df.withColumn(treatment, lit(1))
-    control = df.withColumn(treatment, lit(0))
-
-    # Union the datasets
-    df = treated.union(control)
-
-    # Group the datasets by treatment group and indicator
-    aggregations = [mean(col(column)).alias(column) for column in time_indicator_features]
-    
-    if use_simple_prediction_dataset:
-        # df = df.groupBy([id_column, treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-        df = df.groupBy([treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-
-    return df
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.243ad79a-ef32-4cde-9400-9c8ae7b35c81"),
-    expanded_dataset_for_outcome_analysis_matching_deathoutcome=Input(rid="ri.foundry.main.dataset.7fcd678b-62da-48b1-90e6-1c7e11ec5065"),
-    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
-)
-# Prepare Prediction Dataset (526217de-22d9-4b74-a4ec-bee49edb1a8f): v0
-def prediction_dataset_bootstrapping_death(expanded_dataset_for_outcome_analysis_matching_deathoutcome, nearest_neighbor_matching_all):
-
-    use_simple_prediction_dataset = True
-
-    ##### STEP 1 - CREATE CROSS JOIN BETWEEN DAYS 1-28 AND DISTINCT PERSON_ID #######
-    # We need to expand the dataset so each person has 1 row per day
-    time_end = 14
-    time_column = 'time'
-    trial_column = 'trial'
-    treatment = 'treatment'
-    id_column = 'person_id'
-    days = np.arange(1, time_end + 1)
-    days_df = pd.DataFrame({time_column: days})
-    days_df = spark.createDataFrame(days_df)
-    person_df = expanded_dataset_for_outcome_analysis_matching_deathoutcome.select('person_id').distinct()
-    
-    # Create cross join
-    full_join = person_df.join(days_df)
-    
-    # Join cross join to our input dataset to expand it
-    df = nearest_neighbor_matching_all.select('person_id','trial','subclass','distance',treatment)
-    df = full_join.join(df, on = 'person_id', how = 'inner')
-
-    # # Join to the propensity model dataset to get the features. This will merge ALL predictors on each trial (trials 1-5) with every 30-day block (each block having days 1-30). DAY is the trial column. 
-    # df = df.join(paxlovid_propensity_model_dataset_prep, on = ['person_id','day'], how = 'inner')
-
-    ######## STEP 2 - CREATE THE TIME INDICATORS -28 TIME INDICATORS ###################################
-    for i in np.arange(1, time_end + 1):
-        df = df.withColumn('d{}'.format(i), lit(0))
-        df = df.withColumn('d{}'.format(i), expr('CASE WHEN time = {} THEN 1 ELSE d{} END'.format(i, i)))
-
-    #### What columns do we need in the prediction dataset? Treatment, Time, Predictors
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    # predictors = Model_predictors['predictors'].tolist()
-
-    # # Create a final list of output features. We will include "day" so we can aggregate later
-    final_columns = [trial_column] + [time_column] + [treatment] + time_indicator_features 
-    
-    # Filter to the final column list
-    df = df.select(['person_id'] + final_columns)
-
-    # Create separate datasets where everyone is treatment and control and then stack them
-    treated = df.withColumn(treatment, lit(1))
-    control = df.withColumn(treatment, lit(0))
-
-    # Union the datasets
-    df = treated.union(control)
-
-    # Group the datasets by treatment group and indicator
-    aggregations = [mean(col(column)).alias(column) for column in time_indicator_features]
-    
-    if use_simple_prediction_dataset:
-        # df = df.groupBy([id_column, treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-        df = df.groupBy([treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-
-    return df
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.b9c72c59-ef49-4bfc-b5d1-f00ddc4a4be1"),
-    expanded_dataset_for_outcome_analysis_matching_modcomposite=Input(rid="ri.foundry.main.dataset.1a14ee76-280e-46a0-8072-d3adea949e40"),
-    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
-)
-# Prepare Prediction Dataset (526217de-22d9-4b74-a4ec-bee49edb1a8f): v0
-def prediction_dataset_bootstrapping_modcomposite(expanded_dataset_for_outcome_analysis_matching_modcomposite, nearest_neighbor_matching_all):
-
-    use_simple_prediction_dataset = True
-
-    ##### STEP 1 - CREATE CROSS JOIN BETWEEN DAYS 1-28 AND DISTINCT PERSON_ID #######
-    # We need to expand the dataset so each person has 1 row per day
-    time_end = 14
-    time_column = 'time'
-    trial_column = 'trial'
-    treatment = 'treatment'
-    id_column = 'person_id'
-    days = np.arange(1, time_end + 1)
-    days_df = pd.DataFrame({time_column: days})
-    days_df = spark.createDataFrame(days_df)
-    person_df = expanded_dataset_for_outcome_analysis_matching_modcomposite.select('person_id').distinct()
-    
-    # Create cross join
-    full_join = person_df.join(days_df)
-    
-    # Join cross join to our input dataset to expand it
-    df = nearest_neighbor_matching_all.select('person_id','trial','subclass','distance',treatment)
-    df = full_join.join(df, on = 'person_id', how = 'inner')
-
-    # # Join to the propensity model dataset to get the features. This will merge ALL predictors on each trial (trials 1-5) with every 30-day block (each block having days 1-30). DAY is the trial column. 
-    # df = df.join(paxlovid_propensity_model_dataset_prep, on = ['person_id','day'], how = 'inner')
-
-    ######## STEP 2 - CREATE THE TIME INDICATORS -28 TIME INDICATORS ###################################
-    for i in np.arange(1, time_end + 1):
-        df = df.withColumn('d{}'.format(i), lit(0))
-        df = df.withColumn('d{}'.format(i), expr('CASE WHEN time = {} THEN 1 ELSE d{} END'.format(i, i)))
-
-    #### What columns do we need in the prediction dataset? Treatment, Time, Predictors
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    # predictors = Model_predictors['predictors'].tolist()
-
-    # # Create a final list of output features. We will include "day" so we can aggregate later
-    final_columns = [trial_column] + [time_column] + [treatment] + time_indicator_features 
-    
-    # Filter to the final column list
-    df = df.select(['person_id'] + final_columns)
-
-    # Create separate datasets where everyone is treatment and control and then stack them
-    treated = df.withColumn(treatment, lit(1))
-    control = df.withColumn(treatment, lit(0))
-
-    # Union the datasets
-    df = treated.union(control)
-
-    # Group the datasets by treatment group and indicator
-    aggregations = [mean(col(column)).alias(column) for column in time_indicator_features]
-    
-    if use_simple_prediction_dataset:
-        # df = df.groupBy([id_column, treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-        df = df.groupBy([treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-
-    return df
-    
-
-#################################################
-## Global imports and functions included below ##
-#################################################
-
-######## GLOBAL CODE
-# We can add this code to the GLOBAL CODE on the RHS pane
-# Import the data types we will be using to functions and schemas
-from pyspark.sql.types import StructType, DateType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-
-# Import functions and tools to make functions, and interact with columns with dot functions or SQL functions
-from pyspark.sql.functions import lower, upper, col, udf, monotonically_increasing_id, to_date, trim, ltrim, rtrim, avg
-from pyspark.sql.functions import length, size, unix_timestamp, from_unixtime, broadcast, to_timestamp, split, when, rand, count, round, countDistinct, product
-
-# Additional Functions
-from pyspark.sql.functions import min, max, col, mean, lit, sum, when, regexp_replace, lower, upper, concat_ws, to_date, floor, months_between, datediff, date_add, current_date, least, greatest, last_day, last, expr
-
-# Functions for window functions
-from pyspark.sql import Window
-from pyspark.sql.functions import row_number
-
-### PYTHON Functions
-import datetime as dt
-
-## GLOBAL PY CODE
-### Import all necessary packages
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import re
-
-# Pandas functions
-idx = pd.IndexSlice
-
-# Viewing related functions
-import warnings
-warnings.filterwarnings('ignore')
-pd.set_option('display.max_rows', 500)
-pd.set_option('display.max_columns', 500)
-pd.set_option('display.width', 1000)
-
-@transform_pandas(
-    Output(rid="ri.foundry.main.dataset.b0bd1564-61f1-49d5-b7a5-64757695b687"),
-    expanded_dataset_for_outcome_analysis_matching=Input(rid="ri.foundry.main.dataset.32ef28d9-6ad8-4b41-8a63-c6e4e37036d9"),
-    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982"),
-    paxlovid_expanded_data_long_covid=Input(rid="ri.foundry.main.dataset.3d2b0e13-8f89-43c2-b72a-f1e6cad12d67")
-)
-def prediction_dataset_bootstrapping_paxlovid_LC(expanded_dataset_for_outcome_analysis_matching, nearest_neighbor_matching_all, paxlovid_expanded_data_long_covid):
-
-    use_simple_prediction_dataset = True
-
-    ##### STEP 1 - CREATE CROSS JOIN BETWEEN DAYS 1-28 AND DISTINCT PERSON_ID #######
-    # We need to expand the dataset so each person has 1 row per day
-    time_end = 7
-    time_column = 'time'
-    trial_column = 'trial'
-    treatment = 'treatment'
-    id_column = 'person_id'
-    days = np.arange(1, time_end + 1)
-    days_df = pd.DataFrame({time_column: days})
-    days_df = spark.createDataFrame(days_df)
-    person_df = expanded_dataset_for_outcome_analysis_matching.select('person_id').distinct()
-    
-    # Create cross join
-    full_join = person_df.join(days_df)
-    
-    # Join cross join to our input dataset to expand it
-    df = nearest_neighbor_matching_all.select('person_id','trial','subclass','distance',treatment)
-    df = full_join.join(df, on = 'person_id', how = 'inner')
-
-    # # Join to the propensity model dataset to get the features. This will merge ALL predictors on each trial (trials 1-5) with every 30-day block (each block having days 1-30). DAY is the trial column. 
-    # df = df.join(paxlovid_propensity_model_dataset_prep, on = ['person_id','day'], how = 'inner')
-
-    ######## STEP 2 - CREATE THE TIME INDICATORS -28 TIME INDICATORS ###################################
-    for i in np.arange(1, time_end + 1):
-        df = df.withColumn('d{}'.format(i), lit(0))
-        df = df.withColumn('d{}'.format(i), expr('CASE WHEN time = {} THEN 1 ELSE d{} END'.format(i, i)))
-
-    #### What columns do we need in the prediction dataset? Treatment, Time, Predictors
-    time_indicator_features = ['d{}'.format(i) for i in np.arange(1, time_end+1)]
-    # predictors = Model_predictors['predictors'].tolist()
-
-    # # Create a final list of output features. We will include "day" so we can aggregate later
-    final_columns = [trial_column] + [time_column] + [treatment] + time_indicator_features 
-    
-    # Filter to the final column list
-    df = df.select(['person_id'] + final_columns)
-
-    # Create separate datasets where everyone is treatment and control and then stack them
-    treated = df.withColumn(treatment, lit(1))
-    control = df.withColumn(treatment, lit(0))
-
-    # Union the datasets
-    df = treated.union(control)
-
-    # Group the datasets by treatment group and indicator
-    aggregations = [mean(col(column)).alias(column) for column in time_indicator_features]
-    
-    if use_simple_prediction_dataset:
-        # df = df.groupBy([id_column, treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
-        df = df.groupBy([treatment, time_column]).agg(*aggregations).orderBy([treatment, time_column])
+    df = df.select(['person_id', 'subclass', treatment_column, 'long_covid_time','row_id', 'trial'] + target_column).withColumn('outcome', expr('MAX(outcome) OVER(PARTITION BY person_id)')).where(expr('time = 1'))
+
+    ##### NEW CODE - GET THE DEATH TIME FROM EXPANDED DATASET ORIGINAL
+    # Then truncate death time to 180 days
+    df = df.join(propensity_model_prep_expanded.select('person_id','trial','death_time','death'), on = ['person_id','trial'], how = 'inner')
+    df = df.withColumn('death', expr('CASE WHEN death_time <= 180 AND death = 1 THEN 1 ELSE 0 END'))
+    df = df.withColumn('death_time', expr('CASE WHEN death_time <= 180 THEN death_time ELSE 180 END'))
+
+    ##### Code a competing risk outcome
+    # 1 = LC
+    # 2 = Death
+    # If the patient experiences BOTH outcomes - then code the outcome which occurred earlier
+    expression = 'CASE \
+    WHEN (death = 1 AND outcome = 1) AND (long_covid_time <= death_time) THEN 1 \
+    WHEN (death = 1 AND outcome = 1) AND (long_covid_time > death_time) THEN 2 \
+    WHEN outcome = 1 THEN 1 \
+    WHEN death = 1 THEN 2 \
+    ELSE 0 END'
+    df = df.withColumn('event', expr(expression))
+    df = df.withColumn('event_time', expr('LEAST(death_time, long_covid_time)'))
 
     return df
     
@@ -7464,6 +6564,7 @@ def propensity_model_prep_expanded(propensity_model_prep, long_dataset_all):
     # Join the input data to all rows of the grace period. Rename "day" to "trial" in the input data. Keep all rows up to an including the day of the trial (when the person got treated with either metformin or other treatment; this is technically a competing risk model).
     # df = person_days.join(propensity_model_prep_all_withlab.withColumnRenamed('day','trial'), on = ['person_id','day'], how = 'inner').where(expr('day <= trial'))
     df = person_days.join(propensity_model_prep, on = ['person_id','day'], how = 'inner')
+    print(df.count())
 
     ############################ Make another composite outcome - excludes supp oxygen ######################################
     outcome_date_columns = [
@@ -7510,6 +6611,30 @@ def propensity_model_prep_expanded(propensity_model_prep, long_dataset_all):
 
     df = df.withColumn('composite_death_hosp14', expr('CASE WHEN composite_death_hosp_date IS NOT NULL AND composite_death_hosp_time <= 14 THEN 1 ELSE 0 END'))
     df = df.withColumn('composite_death_hosp_time14', expr('CASE WHEN composite_death_hosp_time <= 14 THEN composite_death_hosp_time ELSE 14 END'))
+
+    # NEW CODE - ADD COMPETING EVENT OUTCOME
+    ##### Code a competing risk outcome
+    # 1 = LC
+    # 2 = Death
+    # If the patient experiences BOTH outcomes - then code the outcome which occurred earlier
+    expression = 'CASE \
+    WHEN (death28 = 1 AND hospitalization28 = 1) AND (hospitalization_time28 <= death_time28) THEN 1 \
+    WHEN (death28 = 1 AND hospitalization28 = 1) AND (hospitalization_time28 > death_time28) THEN 2 \
+    WHEN hospitalization28 = 1 THEN 1 \
+    WHEN death28 = 1 THEN 2 \
+    ELSE 0 END'
+    df = df.withColumn('hosp_death_competing28', expr(expression))
+    df = df.withColumn('hosp_death_competing_time28', expr('LEAST(death_time28, hospitalization_time28)'))
+    df = df.withColumn('hosp_death_competing_date', expr('LEAST(death_date, hospitalization_date)'))
+
+    expression = 'CASE \
+    WHEN (death14 = 1 AND hospitalization14 = 1) AND (hospitalization_time14 <= death_time14) THEN 1 \
+    WHEN (death14 = 1 AND hospitalization14 = 1) AND (hospitalization_time14 > death_time14) THEN 2 \
+    WHEN hospitalization14 = 1 THEN 1 \
+    WHEN death14 = 1 THEN 2 \
+    ELSE 0 END'
+    df = df.withColumn('hosp_death_competing14', expr(expression))
+    df = df.withColumn('hosp_death_competing_time14', expr('LEAST(death_time14, hospitalization_time14)'))
     
     #######################################
     df = df.withColumn('trial', col('day'))

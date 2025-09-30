@@ -88,11 +88,11 @@ SELECT * FROM tab2 WHERE death_date_min IS NOT NULL
 
 @transform_pandas(
     Output(rid="ri.foundry.main.dataset.1a9a8672-d760-4528-902a-ff5c18de18ba"),
-    merge_results=Input(rid="ri.foundry.main.dataset.b5e5c84a-33bd-46d9-8620-5d95eca65f9c"),
-    merge_results_HRs=Input(rid="ri.foundry.main.dataset.3ce973a0-3ec4-41f6-acc5-7b71551d38c4")
+    merge_results_HRs=Input(rid="ri.foundry.main.dataset.3ce973a0-3ec4-41f6-acc5-7b71551d38c4"),
+    merge_results_rrs=Input(rid="ri.foundry.main.dataset.b5e5c84a-33bd-46d9-8620-5d95eca65f9c")
 )
 SELECT *, 1 AS Rank_overall, 'Main Analysis' AS Analysis
-FROM merge_results
+FROM merge_results_rrs
  
 UNION ALL
 
@@ -114,6 +114,23 @@ GROUP BY 1
 ORDER BY 2 DESC
 
 @transform_pandas(
+    Output(rid="ri.foundry.main.dataset.ff6671cd-bffa-4a1e-93bf-db435109814c"),
+    propensity_model_prep_expanded=Input(rid="ri.foundry.main.dataset.9999bcdb-ba34-4487-99b3-64a79b95e279")
+)
+WITH t1 AS (
+    SELECT max(day) OVER(PARTITION BY person_id) AS max_trial, person_id, day
+    FROM propensity_model_prep_expanded
+)
+
+, T2 AS (
+    SELECT * FROM t1 WHERE day = 1
+)
+
+-- SELECT approx_percentile(max_trial, 0.5) AS median_trials FROM T2
+
+SELECT * FROM T2
+
+@transform_pandas(
     Output(rid="ri.vector.main.execute.7e52f740-8d3d-46ec-852d-e80be8bd223a"),
     eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb")
 )
@@ -121,19 +138,55 @@ SELECT
 CASE 
 WHEN paxlovid_treatment = 1 THEN 'PAXLOVID'
 ELSE 'UNTREATED' END AS treatment
+,'Persons' AS denom
 , COUNT(DISTINCT person_id) AS group_size
 FROM eligible_sample_EHR_all
-GROUP BY 1
+GROUP BY 1,2
+
+-- UNION ALL
+
+-- SELECT 
+-- CASE 
+-- WHEN treated = 1 THEN 'PAXLOVID'
+-- ELSE 'UNTREATED' END AS treatment
+-- , COUNT(DISTINCT person_id) AS group_size
+-- FROM eligible_sample_EHR_all
+-- GROUP BY 1
+
+-- UNION ALL
+
+-- SELECT 
+-- CASE 
+-- WHEN treatment = 1 THEN 'PAXLOVID'
+-- ELSE 'UNTREATED' END AS treatment
+-- , COUNT(DISTINCT person_id) AS group_size
+-- FROM eligible_sample_EHR_all
+-- GROUP BY 1
 
 UNION ALL
 
 SELECT 
 CASE 
-WHEN treated = 1 THEN 'PAXLOVID'
+WHEN paxlovid_treatment = 1 THEN 'PAXLOVID'
 ELSE 'UNTREATED' END AS treatment
-, COUNT(DISTINCT person_id) AS group_size
+,'Person Trials' AS denom
+, COUNT(person_id) AS group_size
 FROM eligible_sample_EHR_all
-GROUP BY 1
+GROUP BY 1,2
+
+@transform_pandas(
+    Output(rid="ri.vector.main.execute.6cd9e3ce-dd11-4aad-8fea-bad1ab848083"),
+    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb"),
+    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
+)
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+,'Persons' AS denom
+, COUNT(DISTINCT person_id) AS group_size
+FROM nearest_neighbor_matching_all
+GROUP BY 1,2
 
 UNION ALL
 
@@ -141,9 +194,116 @@ SELECT
 CASE 
 WHEN treatment = 1 THEN 'PAXLOVID'
 ELSE 'UNTREATED' END AS treatment
+,'Person Trials' AS denom
+, COUNT(person_id) AS group_size
+FROM nearest_neighbor_matching_all
+GROUP BY 1,2
+
+@transform_pandas(
+    Output(rid="ri.vector.main.execute.c78df2f2-ee2e-4cc4-a2f8-f851e66245b0"),
+    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb"),
+    nearest_neighbor_matching_LC=Input(rid="ri.foundry.main.dataset.6d3eb3b5-af0e-4831-9d10-c593c7158038"),
+    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
+)
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+,'Persons' AS denom
 , COUNT(DISTINCT person_id) AS group_size
-FROM eligible_sample_EHR_all
-GROUP BY 1
+FROM nearest_neighbor_matching_LC
+GROUP BY 1,2
+
+UNION ALL
+
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+,'Person Trials' AS denom
+, COUNT(person_id) AS group_size
+FROM nearest_neighbor_matching_LC
+GROUP BY 1,2
+
+@transform_pandas(
+    Output(rid="ri.vector.main.execute.9f1804c7-4b71-4ee5-8377-76f8dd802685"),
+    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb"),
+    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
+)
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+, trial
+,'Persons' AS denom
+, COUNT(DISTINCT subclass) AS group_size
+FROM nearest_neighbor_matching_all
+GROUP BY 1,2,3
+ORDER BY denom, treatment, trial
+
+-- UNION ALL
+
+-- SELECT 
+-- CASE 
+-- WHEN treatment = 1 THEN 'PAXLOVID'
+-- ELSE 'UNTREATED' END AS treatment
+-- ,'Person Trials' AS denom
+-- , COUNT(person_id) AS group_size
+-- FROM nearest_neighbor_matching_all
+-- GROUP BY 1,2
+
+@transform_pandas(
+    Output(rid="ri.vector.main.execute.1987aa01-2f8f-4f9c-83f6-c2e834bca614"),
+    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb"),
+    nearest_neighbor_matching_LC=Input(rid="ri.foundry.main.dataset.6d3eb3b5-af0e-4831-9d10-c593c7158038"),
+    nearest_neighbor_matching_all=Input(rid="ri.foundry.main.dataset.7ed3e283-f6c6-43f0-baf6-ee29ea81c982")
+)
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+, trial
+,'Persons' AS denom
+, COUNT(DISTINCT subclass) AS group_size
+FROM nearest_neighbor_matching_LC
+GROUP BY 1,2,3
+ORDER BY denom, treatment, trial
+
+-- UNION ALL
+
+-- SELECT 
+-- CASE 
+-- WHEN treatment = 1 THEN 'PAXLOVID'
+-- ELSE 'UNTREATED' END AS treatment
+-- ,'Person Trials' AS denom
+-- , COUNT(person_id) AS group_size
+-- FROM nearest_neighbor_matching_all
+-- GROUP BY 1,2
+
+@transform_pandas(
+    Output(rid="ri.vector.main.execute.96f3ead0-4326-4860-9173-bfd2bbd8aa40"),
+    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb"),
+    propensity_model_all_weights_formatching_LC=Input(rid="ri.foundry.main.dataset.41cf61a7-c055-49df-aa97-408c434c6a9f")
+)
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+,'Persons' AS denom
+, COUNT(DISTINCT person_id) AS group_size
+FROM propensity_model_all_weights_formatching_LC
+GROUP BY 1,2
+
+UNION ALL
+
+SELECT 
+CASE 
+WHEN treatment = 1 THEN 'PAXLOVID'
+ELSE 'UNTREATED' END AS treatment
+,'Person Trials' AS denom
+, COUNT(person_id) AS group_size
+FROM propensity_model_all_weights_formatching_LC
+GROUP BY 1,2
 
 @transform_pandas(
     Output(rid="ri.foundry.main.dataset.90b57f36-aaeb-4f6d-8831-6141389595e0"),
@@ -647,10 +807,4 @@ SELECT * FROM t1 WHERE
 -- AND day = 1
 -- AND paxlovid_treatment = 0
 person_id = '1005991731621945870'
-
-@transform_pandas(
-    Output(rid="ri.vector.main.execute.d43953fd-97bf-446a-a44f-430f2a2da437"),
-    eligible_sample_EHR_all=Input(rid="ri.foundry.main.dataset.bb3f1155-74ee-4013-b621-67e08eca5aeb")
-)
-SELECT DISTINCT vaccinated_LVCF FROM eligible_sample_EHR_all
 
